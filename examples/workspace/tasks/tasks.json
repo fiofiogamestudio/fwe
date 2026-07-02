@@ -1,0 +1,6 @@
+{
+  "tasks": [
+    { "id": "find_key", "name": "找到钥匙", "status": "可用", "reward": 100, "note": "最小任务示例。" },
+    { "id": "open_door", "name": "打开大门", "status": "草稿", "reward": 150, "note": "" }
+  ]
+}

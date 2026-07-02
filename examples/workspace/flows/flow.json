@@ -1,0 +1,8 @@
+{
+  "id": "hello",
+  "entry": 1,
+  "nodes": [
+    { "id": 1, "kind": "对白", "text": "你好，欢迎来到这里。", "next": 2 },
+    { "id": 2, "kind": "结束", "text": "再见。", "next": null }
+  ]
+}

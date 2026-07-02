@@ -1,0 +1,20 @@
+{
+  "id": "fwe-example",
+  "title": "fwe 示例",
+  "workspace": "./workspace",
+  "port": 3219,
+  "extensions": [
+    {
+      "client": "./extensions/dice-cross.layout.js"
+    }
+  ],
+  "domains": [
+    "./domains/settings.fwe",
+    "./domains/items.fwe",
+    "./domains/tasks.fwe",
+    "./domains/flow.fwe",
+    "./domains/blueprint.fwe",
+    "./domains/dice.fwe",
+    "./domains/notes.fwe"
+  ]
+}

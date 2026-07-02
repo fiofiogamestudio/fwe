@@ -1,0 +1,16 @@
+{
+  "templateVersion": 1,
+  "format": "text",
+  "kind": "text",
+  "model": {
+    "type": "text"
+  },
+  "params": {},
+  "modes": [
+    "text"
+  ],
+  "defaults": {
+    "fileName": "text.txt",
+    "text": ""
+  }
+}

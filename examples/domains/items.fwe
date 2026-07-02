@@ -1,0 +1,19 @@
+id items
+title "物品"
+source "folder-json:items"
+
+data ItemFile {
+  items: Item[]
+}
+
+type Item {
+  id: int @key
+  name: string @label("名称")
+  type: string = "材料" @label("类型") @enum("武器", "药水", "材料")
+  price: int = 10 @label("价格") @range(min=0, max=9999)
+}
+
+view table items {
+  columns [id, name, type, price]
+  modes [table, detail, json]
+}

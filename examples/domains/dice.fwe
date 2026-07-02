@@ -1,0 +1,33 @@
+id dice
+title "骰子"
+source "folder-json:dice"
+
+data DiceFile {
+  dice: Die[]
+}
+
+type Die {
+  id: int @key
+  face: int @label("点数") @range(1, 6)
+  locked: bool = false @label("锁定")
+  slot: string @label("位置") @enum("center", "top", "right", "bottom", "left")
+}
+
+view workbench {
+  layout dice-cross
+  default {
+    collection dice
+    list detail
+    mode cross
+  }
+  slot slot
+  face face
+  locked locked
+  slots [top, left, center, right, bottom]
+
+  collection dice {
+    path dice
+    title face
+    modes [{"id":"cross","label":"布局"}, {"id":"json","label":"JSON","view":"json"}]
+  }
+}

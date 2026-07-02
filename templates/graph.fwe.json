@@ -1,0 +1,96 @@
+{
+  "templateVersion": 1,
+  "kind": "graph",
+  "title": "Graph",
+  "source": {
+    "type": "folder-json",
+    "path": "",
+    "identity": "id"
+  },
+  "model": {
+    "nodes": "nodes"
+  },
+  "graph": {
+    "layout": "fixed",
+    "entry": "entry",
+    "nodes": "nodes",
+    "nodeId": "id",
+    "nodeKind": "kind",
+    "position": "pos",
+    "edges": [
+      "next -> nodes.id"
+    ]
+  },
+  "actions": {
+    "add": true,
+    "duplicate": true,
+    "delete": true,
+    "undo": true,
+    "redo": true,
+    "defaults": {
+      "nodes": {
+        "id": 1,
+        "kind": "Start",
+        "next": null
+      }
+    }
+  },
+  "save": {
+    "allowInvalid": false
+  },
+  "defaults": {
+    "fileName": "graph.json",
+    "nodeKind": "Start",
+    "data": {
+      "id": "new_graph",
+      "entry": 1,
+      "nodes": [
+        {
+          "id": 1,
+          "kind": "Start",
+          "next": null
+        }
+      ]
+    }
+  },
+  "refs": {
+    "nodes": {
+      "path": "nodes",
+      "value": "id",
+      "labelTemplate": "#{id} {kind}"
+    }
+  },
+  "validate": [
+    "unique(nodes.id)",
+    "exists(entry, nodes.id)",
+    "noDanglingEdges()",
+    { "rule": "required", "path": "nodes[].id" }
+  ],
+  "inspector": {
+    "forms": {
+      "meta": {
+        "groups": [
+          {
+            "title": "Graph",
+            "fields": [
+              { "path": "id", "label": "ID", "type": "text" },
+              { "path": "entry", "label": "Entry", "type": "reference", "ref": "nodes", "value": "int", "emptyLabel": "None", "clear": true }
+            ]
+          }
+        ]
+      },
+      "graphNode": {
+        "groups": [
+          {
+            "title": "Node",
+            "fields": [
+              { "path": "id", "label": "ID", "type": "number", "value": "int", "required": true },
+              { "path": "kind", "label": "Kind", "type": "text" },
+              { "path": "next", "label": "Next", "type": "reference", "ref": "nodes", "value": "int", "emptyLabel": "End", "clear": true }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

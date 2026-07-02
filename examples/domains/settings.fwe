@@ -1,0 +1,13 @@
+id settings
+title "设置"
+source "single-json:settings.json"
+
+data Settings {
+  id: string @label("ID")
+  title: string = "示例设置" @label("名称")
+  enabled: bool = true @label("启用")
+}
+
+view form {
+  modes [form, json]
+}

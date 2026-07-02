@@ -1,0 +1,29 @@
+{
+  "templateVersion": 1,
+  "kind": "document",
+  "title": "Document",
+  "source": {
+    "type": "single-json",
+    "path": "",
+    "identity": "id"
+  },
+  "model": {
+    "root": ""
+  },
+  "actions": {
+    "add": true,
+    "duplicate": true,
+    "delete": true,
+    "undo": true,
+    "redo": true
+  },
+  "save": {
+    "allowInvalid": false
+  },
+  "defaults": {
+    "fileName": "document.json",
+    "data": {}
+  },
+  "refs": {},
+  "validate": []
+}

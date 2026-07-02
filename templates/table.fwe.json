@@ -1,0 +1,63 @@
+{
+  "templateVersion": 1,
+  "kind": "table",
+  "title": "Table",
+  "source": {
+    "type": "folder-json",
+    "path": "",
+    "identity": "id"
+  },
+  "model": {
+    "rows": "items",
+    "rowId": "id"
+  },
+  "columns": [],
+  "actions": {
+    "add": true,
+    "duplicate": true,
+    "delete": true,
+    "undo": true,
+    "redo": true
+  },
+  "save": {
+    "allowInvalid": false
+  },
+  "defaults": {
+    "fileName": "table.json",
+    "row": {
+      "id": 1
+    },
+    "data": {
+      "items": []
+    }
+  },
+  "refs": {},
+  "validate": [
+    "unique(items.id)",
+    { "rule": "required", "path": "items[].id" }
+  ],
+  "inspector": {
+    "forms": {
+      "table": {
+        "groups": [
+          {
+            "title": "Row",
+            "fields": [
+              { "path": "id", "label": "ID", "type": "number", "value": "int", "required": true }
+            ]
+          }
+        ]
+      },
+      "meta": {
+        "groups": [
+          {
+            "title": "File",
+            "fields": [
+              { "path": "items", "label": "Items", "type": "readonly" }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

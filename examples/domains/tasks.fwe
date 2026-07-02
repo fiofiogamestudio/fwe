@@ -1,0 +1,37 @@
+id tasks
+title "任务"
+source "folder-json:tasks"
+
+data TaskList {
+  tasks: Task[]
+}
+
+type Task {
+  id: string @key
+  name: string @label("名称")
+  status: string = "草稿" @label("状态") @enum("草稿", "可用", "关闭")
+  reward: int = 100 @label("奖励")
+  note?: string @label("备注") @textarea(rows=3)
+}
+
+view workbench {
+  layout catalog
+  default {
+    collection tasks
+    list detail
+    mode overview
+  }
+  inspector false
+  list [detail, grid]
+
+  collection tasks {
+    label "任务"
+    path tasks
+    title name
+    subtitle [id, status, reward]
+    search [id, name, status, note]
+    columns [id, name, status, reward]
+    modes [{"id":"overview","label":"概览"}, {"id":"json","label":"JSON","view":"json"}]
+    defaultItem {"id":"","name":"新任务","status":"草稿","reward":100,"note":""}
+  }
+}

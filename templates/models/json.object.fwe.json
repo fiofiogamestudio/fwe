@@ -1,0 +1,23 @@
+{
+  "templateVersion": 1,
+  "format": "json",
+  "kind": "document",
+  "model": {
+    "type": "object",
+    "root": "$root"
+  },
+  "params": {
+    "root": "$"
+  },
+  "shape": {
+    "$root": "object"
+  },
+  "modes": [
+    "form",
+    "json"
+  ],
+  "defaults": {
+    "fileName": "document.json",
+    "data": {}
+  }
+}

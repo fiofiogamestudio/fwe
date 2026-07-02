@@ -1,0 +1,29 @@
+id flow
+title "对话"
+source "folder-json:flows"
+
+data Dialog {
+  id: string
+  entry: ref<Node.id>
+  nodes: Node[]
+}
+
+type Node {
+  id: int @key
+  kind: string = "对白" @label("类型") @enum("对白", "结束")
+  text?: string @label("文本") @textarea(rows=4)
+  next?: ref<Node.id> @label("后续") @edge
+}
+
+view graph nodes {
+  layout route-lane
+  entry entry
+  modes [canvas, json]
+
+  node {
+    badge kind
+    title "节点 {id}"
+    body text
+    details [next]
+  }
+}

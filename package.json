@@ -1,0 +1,51 @@
+{
+  "name": "fwe",
+  "version": "0.1.0",
+  "description": "A small generic file-workspace editor runtime.",
+  "type": "commonjs",
+  "main": "src/server.js",
+  "exports": {
+    ".": "./src/server.js",
+    "./server": "./src/server.js",
+    "./dsl": "./src/dsl.js",
+    "./extensions": "./src/extensions.js"
+  },
+  "bin": {
+    "fwe": "bin/fwe.js"
+  },
+  "scripts": {
+    "start": "node bin/fwe.js --app examples/app.fwe.json",
+    "syntax": "node --check public/runtime.js && node --check public/graph.js && node --check public/inspector.js && node --check public/app.js && node --check public/views/workbench.js && node --check src/server.js && node --check src/dsl.js && node --check src/extensions.js",
+    "check": "npm run syntax && node bin/fwe.js --check --app examples/app.fwe.json",
+    "test": "npm run check",
+    "pack:dry": "npm pack --dry-run"
+  },
+  "keywords": [
+    "editor",
+    "json",
+    "workspace",
+    "tooling"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fiofiogamestudio/fwe.git"
+  },
+  "bugs": {
+    "url": "https://github.com/fiofiogamestudio/fwe/issues"
+  },
+  "homepage": "https://github.com/fiofiogamestudio/fwe#readme",
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "public/",
+    "templates/",
+    "examples/",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "license": "MIT"
+}

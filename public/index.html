@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>fwe</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="app">
+    <header class="toolbar resource-bar">
+      <div class="toolbar__group resource-bar__identity">
+        <span id="appTitle" class="toolbar__title">fwe</span>
+        <span id="statusText" class="toolbar__status">加载中</span>
+      </div>
+      <div class="toolbar__group resource-bar__selectors">
+        <select id="domainSelect" title="数据域"></select>
+        <select id="fileSelect" title="文件"></select>
+      </div>
+      <div class="toolbar__group resource-bar__actions">
+        <button id="saveButton" type="button">保存</button>
+        <button id="undoButton" type="button">撤销</button>
+        <button id="redoButton" type="button">重做</button>
+        <div class="command-menu resource-menu-host">
+          <button id="resourceMoreButton" type="button" aria-label="更多" aria-haspopup="menu" aria-expanded="false">...</button>
+          <div id="resourceMenu" class="command-menu__popup hidden" role="menu">
+            <button id="newButton" type="button" role="menuitem">新建</button>
+            <button id="openButton" type="button" role="menuitem">打开</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <section id="surfaceHeader" class="surface-header hidden">
+      <div class="surface-header__context">
+        <span id="surfaceTitle" class="surface-header__title">编辑器</span>
+        <span id="surfaceSelection" class="surface-header__selection"></span>
+      </div>
+      <div class="surface-header__actions">
+        <button id="addButton" type="button">添加</button>
+        <button id="duplicateButton" type="button">复制</button>
+        <button id="deleteButton" type="button">删除</button>
+        <div id="surfaceMore" class="command-menu surface-menu-host hidden">
+          <button id="surfaceMoreButton" type="button" aria-label="更多" aria-haspopup="menu" aria-expanded="false">...</button>
+          <div id="surfaceMenu" class="command-menu__popup hidden" role="menu">
+            <button id="selectMetaButton" type="button" role="menuitem">元数据</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <main class="workspace">
+      <section id="editorPanel" class="editor-panel">
+        <div id="emptyView" class="empty">打开或新建一个文件。</div>
+        <div id="documentView" class="editor-view hidden">
+          <div id="documentTree" class="json-tree"></div>
+        </div>
+        <div id="tableView" class="editor-view hidden">
+          <table>
+            <thead id="tableHead"></thead>
+            <tbody id="tableBody"></tbody>
+          </table>
+        </div>
+        <textarea id="textView" class="code hidden" spellcheck="false"></textarea>
+        <div id="collectionWorkbench" class="collection-workbench hidden">
+          <aside class="collection-browser">
+            <div class="collection-browser__header">
+              <div id="collectionTabs" class="collection-tabs"></div>
+              <input id="collectionSearch" type="search" placeholder="搜索">
+              <div id="collectionLayoutTabs" class="collection-layout-tabs">
+                <button id="collectionDetailButton" type="button">详情</button>
+                <button id="collectionGridButton" type="button">网格</button>
+              </div>
+            </div>
+            <div id="collectionList" class="collection-list"></div>
+          </aside>
+          <section class="collection-editor">
+            <div class="collection-editor__header">
+              <div class="collection-editor__headline">
+                <h2 id="collectionTitle">集合</h2>
+                <div id="collectionSubtitle" class="collection-editor__subtitle"></div>
+              </div>
+              <div id="collectionModeTabs" class="collection-mode-tabs"></div>
+            </div>
+            <div id="collectionVariantTabs" class="collection-variant-tabs"></div>
+            <div id="collectionEditorBody" class="collection-editor__body"></div>
+          </section>
+        </div>
+        <div id="sidepanelWorkbench" class="sidepanel-workbench hidden">
+          <aside class="sidepanel-sidebar">
+            <div id="sidepanelTabs" class="sidepanel-tabs"></div>
+            <div id="sidepanelList" class="sidepanel-file-list"></div>
+          </aside>
+          <section class="sidepanel-editor">
+            <div class="sidepanel-editor__header">
+              <div>
+                <h2 id="sidepanelTitle">编辑器</h2>
+                <div id="sidepanelSubtitle" class="sidepanel-editor__subtitle"></div>
+              </div>
+              <div id="sidepanelModeTabs" class="sidepanel-mode-tabs hidden">
+                <button id="sidepanelFormModeButton" class="is-active" type="button">表单</button>
+                <button id="sidepanelJsonModeButton" type="button">JSON</button>
+              </div>
+            </div>
+            <div id="sidepanelEditorBody" class="sidepanel-editor__body"></div>
+          </section>
+          <aside class="sidepanel-info">
+            <section id="sidepanelReferencesCard" class="sidepanel-card">
+              <div class="sidepanel-card__title">引用</div>
+              <div id="sidepanelReferences" class="sidepanel-reference-list"></div>
+            </section>
+            <section id="sidepanelDiagnosticsCard" class="sidepanel-card">
+              <div class="sidepanel-card__title">诊断</div>
+              <div id="sidepanelDiagnostics" class="sidepanel-diagnostics"></div>
+            </section>
+          </aside>
+        </div>
+      </section>
+
+      <section id="graphView" class="graph-panel hidden">
+        <div id="graphViewport" class="graph-viewport">
+          <div id="graphStage" class="graph-stage">
+            <svg id="graphEdges" class="graph-edges"></svg>
+            <div id="graphNodes" class="graph-nodes"></div>
+          </div>
+          <div class="graph-view-hud">
+            <button id="viewHudResetButton" class="graph-view-hud__button" type="button" title="重置视图">重置</button>
+            <span id="viewScaleText" class="graph-view-hud__scale">100%</span>
+          </div>
+        </div>
+      </section>
+
+      <aside class="inspector">
+        <div class="inspector__header">
+          <h2 id="inspectorTitle">检查器</h2>
+          <div class="inspector-mode-tabs" role="tablist" aria-label="检查器模式">
+            <button id="inspectorFormModeButton" class="is-active" type="button" data-mode="form">表单</button>
+            <button id="inspectorJsonModeButton" type="button" data-mode="json">JSON</button>
+          </div>
+        </div>
+        <div id="inspectorFormView" class="inspector__body">
+          <section id="domainSummaryCard" class="reference-card hidden">
+            <div class="panel-title">数据域</div>
+            <dl id="domainSummary" class="summary-list"></dl>
+          </section>
+          <section id="diagnosticsCard" class="reference-card hidden">
+            <div class="panel-title">诊断</div>
+            <div id="diagnostics" class="diagnostics"></div>
+          </section>
+          <section class="reference-card reference-card--form">
+            <div id="inspectorForm" class="inspector-form"></div>
+          </section>
+        </div>
+        <div id="inspectorJsonView" class="inspector-json hidden">
+          <div class="inspector-json__toolbar">
+            <span id="jsonScopeText" class="inspector-json__scope"></span>
+            <button id="jsonApplyButton" type="button">应用</button>
+            <button id="jsonRevertButton" type="button">还原</button>
+          </div>
+          <div id="jsonErrorText" class="inspector-json__error hidden"></div>
+          <textarea id="jsonEditor" class="code" spellcheck="false"></textarea>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <div id="graphContextMenu" class="context-menu hidden"></div>
+
+  <script src="./runtime.js"></script>
+  <script src="./graph.js"></script>
+  <script src="./inspector.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

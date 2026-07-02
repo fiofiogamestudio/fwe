@@ -1,0 +1,28 @@
+{
+  "templateVersion": 1,
+  "kind": "text",
+  "title": "Text",
+  "source": {
+    "type": "folder-text",
+    "path": "",
+    "extensions": [
+      ".txt",
+      ".lua",
+      ".json"
+    ],
+    "identity": "name"
+  },
+  "defaults": {
+    "fileName": "text.txt",
+    "text": ""
+  },
+  "actions": {
+    "undo": true,
+    "redo": true
+  },
+  "save": {
+    "allowInvalid": true
+  },
+  "refs": {},
+  "validate": []
+}

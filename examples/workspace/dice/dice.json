@@ -1,0 +1,9 @@
+{
+  "dice": [
+    { "id": 1, "face": 6, "locked": true, "slot": "center" },
+    { "id": 2, "face": 2, "locked": false, "slot": "top" },
+    { "id": 3, "face": 4, "locked": false, "slot": "left" },
+    { "id": 4, "face": 1, "locked": false, "slot": "right" },
+    { "id": 5, "face": 3, "locked": false, "slot": "bottom" }
+  ]
+}

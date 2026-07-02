@@ -1,0 +1,34 @@
+{
+  "templateVersion": 1,
+  "format": "json",
+  "kind": "table",
+  "model": {
+    "type": "table",
+    "rows": "$rows",
+    "rowId": "$id",
+    "id": "$id"
+  },
+  "params": {
+    "rows": "items",
+    "id": "id"
+  },
+  "shape": {
+    "$": "object",
+    "$rows": "array<object>",
+    "$rows[].$id": "required unique"
+  },
+  "modes": [
+    "table",
+    "detail",
+    "json"
+  ],
+  "defaults": {
+    "fileName": "table.json",
+    "row": {
+      "$id": 1
+    },
+    "data": {
+      "$rows": []
+    }
+  }
+}

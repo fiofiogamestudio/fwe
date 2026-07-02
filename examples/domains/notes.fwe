@@ -1,0 +1,7 @@
+id notes
+title "文本"
+source "folder-text:notes"
+
+view text {
+  language txt
+}

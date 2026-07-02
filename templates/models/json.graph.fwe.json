@@ -1,0 +1,76 @@
+{
+  "templateVersion": 1,
+  "format": "json",
+  "kind": "graph",
+  "model": {
+    "type": "graph",
+    "nodes": "$nodes"
+  },
+  "graph": {
+    "layout": "$layout",
+    "entry": "$entry",
+    "nodes": "$nodes",
+    "nodeId": "$id",
+    "nodeKind": "$kind",
+    "position": "$position",
+    "edges": "$edges"
+  },
+  "refs": {
+    "nodes": {
+      "path": "$nodes",
+      "value": "$id",
+      "labelTemplate": "#{$id} {$kind}"
+    }
+  },
+  "params": {
+    "nodes": "nodes",
+    "id": "id",
+    "kind": "kind",
+    "layout": "fixed",
+    "entry": "entry",
+    "position": "pos",
+    "edges": [
+      "next"
+    ]
+  },
+  "shape": {
+    "$": "object",
+    "$nodes": "array<object>",
+    "$nodes[].$id": "required unique",
+    "$nodes[].$position.x": "required int when layout=free",
+    "$nodes[].$position.y": "required int when layout=free"
+  },
+  "rules": [
+    "exists($entry, $nodes.$id)",
+    "noDanglingEdges()"
+  ],
+  "modes": [
+    "graph",
+    "form",
+    "json"
+  ],
+  "actions": {
+    "defaults": {
+      "$nodes": {
+        "$id": 1,
+        "$kind": "Start",
+        "next": null
+      }
+    }
+  },
+  "defaults": {
+    "fileName": "graph.json",
+    "nodeKind": "Start",
+    "data": {
+      "id": "new_graph",
+      "$entry": 1,
+      "$nodes": [
+        {
+          "$id": 1,
+          "$kind": "Start",
+          "next": null
+        }
+      ]
+    }
+  }
+}

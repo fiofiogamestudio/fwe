@@ -1,0 +1,97 @@
+{
+  "id": "skill_target_select",
+  "nodes": [
+    {
+      "id": 1,
+      "type": "SkillStart",
+      "pos": { "x": 8, "y": 10 },
+      "values": {}
+    },
+    {
+      "id": 2,
+      "type": "FindTarget",
+      "pos": { "x": 38, "y": 10 },
+      "values": {
+        "range": 6
+      }
+    },
+    {
+      "id": 3,
+      "type": "HasTarget",
+      "pos": { "x": 68, "y": 10 },
+      "values": {}
+    },
+    {
+      "id": 4,
+      "type": "ApplyDamage",
+      "pos": { "x": 68, "y": 34 },
+      "values": {
+        "amount": 12
+      }
+    },
+    {
+      "id": 5,
+      "type": "Success",
+      "pos": { "x": 98, "y": 34 },
+      "values": {}
+    },
+    {
+      "id": 6,
+      "type": "Fail",
+      "pos": { "x": 38, "y": 34 },
+      "values": {}
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_exec_start_find",
+      "from": { "node": 1, "port": "exec" },
+      "to": { "node": 2, "port": "exec" }
+    },
+    {
+      "id": "e_caster_center",
+      "from": { "node": 1, "port": "caster" },
+      "to": { "node": 2, "port": "center" }
+    },
+    {
+      "id": "e_exec_find_check",
+      "from": { "node": 2, "port": "then" },
+      "to": { "node": 3, "port": "exec" }
+    },
+    {
+      "id": "e_targets_check",
+      "from": { "node": 2, "port": "targets" },
+      "to": { "node": 3, "port": "targets" }
+    },
+    {
+      "id": "e_exec_true_damage",
+      "from": { "node": 3, "port": "true" },
+      "to": { "node": 4, "port": "exec" }
+    },
+    {
+      "id": "e_target_damage",
+      "from": { "node": 3, "port": "target" },
+      "to": { "node": 4, "port": "target" }
+    },
+    {
+      "id": "e_exec_false_fail",
+      "from": { "node": 3, "port": "false" },
+      "to": { "node": 6, "port": "exec" }
+    },
+    {
+      "id": "e_exec_damage_success",
+      "from": { "node": 4, "port": "then" },
+      "to": { "node": 5, "port": "exec" }
+    },
+    {
+      "id": "e_target_success",
+      "from": { "node": 3, "port": "target" },
+      "to": { "node": 5, "port": "target" }
+    },
+    {
+      "id": "e_damage_success",
+      "from": { "node": 4, "port": "damage" },
+      "to": { "node": 5, "port": "damage" }
+    }
+  ]
+}

@@ -1,0 +1,85 @@
+id blueprint
+title "蓝图"
+source "folder-json:blueprints"
+
+data BlueprintGraph {
+  id: string
+  nodes: Node[] @nodes
+  edges: Edge[]
+}
+
+type Node {
+  id: int @key
+  type: string @label("节点类型")
+  pos: Point @position
+  values: json @label("参数") @default({})
+}
+
+type Edge {
+  id: string @key
+  from: Endpoint
+  to: Endpoint
+}
+
+type Endpoint {
+  node: int
+  port: string
+}
+
+type Point {
+  x: int
+  y: int
+}
+
+view blueprint nodes {
+  layout free grid 10
+  edges edges
+  nodeType type
+  values values
+  modes [canvas, json]
+
+  node SkillStart {
+    title "技能释放"
+    out exec: exec @control @label("执行")
+    out caster: Actor @label("施放者")
+  }
+
+  node FindTarget {
+    title "搜索目标"
+    in exec: exec @control @label("执行")
+    in center: Actor @label("中心")
+    in range: int = 6 @label("范围")
+    out then: exec @control @label("继续")
+    out targets: Actor[] @label("目标列表")
+  }
+
+  node HasTarget {
+    title "是否有目标"
+    in exec: exec @control @label("执行")
+    in targets: Actor[] @label("目标列表")
+    out true: exec @control @label("有目标")
+    out false: exec @control @label("无目标")
+    out target: Actor @label("目标")
+  }
+
+  node ApplyDamage {
+    title "造成伤害"
+    in exec: exec @control @label("执行")
+    in target: Actor @label("目标")
+    in amount: int = 12 @label("伤害")
+    out then: exec @control @label("完成")
+    out damage: int @label("实际伤害")
+  }
+
+  node Success {
+    title "成功结束"
+    in exec: exec @control @label("执行")
+    in target: Actor @label("目标")
+    in damage: int @label("伤害")
+  }
+
+  node Fail {
+    title "失败结束"
+    in exec: exec @control @label("执行")
+  }
+}
