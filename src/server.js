@@ -188,6 +188,9 @@ function getContentType(fullPath) {
     ext === '.json' ? 'application/json; charset=utf-8' :
     ext === '.svg' ? 'image/svg+xml' :
     ext === '.png' ? 'image/png' :
+    ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' :
+    ext === '.gif' ? 'image/gif' :
+    ext === '.webp' ? 'image/webp' :
     'application/octet-stream'
   );
 }
@@ -238,6 +241,7 @@ function loadAppConfig(appPathInput) {
   const extensionEntries = raw.extensions || raw.plugins || [];
   const extensionRegistry = loadFweExtensions(extensionEntries, appDir);
   const clientExtensions = normalizeClientExtensions(extensionEntries, appDir);
+  const assetRoots = normalizeAssetRoots(raw.assets || raw.assetRoots || {}, workspaceDir);
 
   const app = {
     id: String(raw.id || raw.app || 'fwe-app'),
@@ -250,6 +254,7 @@ function loadAppConfig(appPathInput) {
     appPath,
     extensionRegistry,
     clientExtensions,
+    assetRoots,
     domains: domainRefs.map((ref) => loadDomainConfig(ref, appDir, {
       extensionEntries,
       extensionAppDir: appDir
@@ -1007,6 +1012,11 @@ function publicApp(app) {
       name: entry.name,
       url: `/api/extensions/${entry.id}/${encodeURIComponent(entry.name)}`
     })),
+    assets: app.assetRoots.map((entry) => ({
+      id: entry.id,
+      extensions: entry.extensions,
+      files: listAssetRootFiles(entry)
+    })),
     templates: listTemplates()
   };
 }
@@ -1053,6 +1063,44 @@ function normalizeClientExtensions(entries, appDir) {
     });
   });
   return result;
+}
+
+function normalizeAssetRoots(rawAssets, workspaceDir) {
+  const entries = Array.isArray(rawAssets)
+    ? rawAssets.map((config) => config || {})
+    : Object.entries(rawAssets || {}).map(([id, config]) => (
+      typeof config === 'string'
+        ? { id, path: config }
+        : { id, ...(config || {}) }
+    ));
+  return entries.map((config, index) => {
+    const id = String(config.id || '').trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(id)) {
+      throw new Error(`Invalid asset root id at assets[${index}]: ${id}`);
+    }
+    const rootPath = resolveUnderWorkspace(workspaceDir, config.path, `assets.${id}.path`);
+    if (!fs.existsSync(rootPath) || !fs.statSync(rootPath).isDirectory()) {
+      throw new Error(`Asset root must be an existing directory: ${config.path}`);
+    }
+    return {
+      id,
+      path: rootPath,
+      extensions: normalizeExtensions(config.extensions || ['.png', '.jpg', '.jpeg', '.gif', '.webp']),
+      recursive: config.recursive === true
+    };
+  });
+}
+
+function listAssetRootFiles(root) {
+  const files = [];
+  walkFiles(root.path, root.recursive === true, (filePath) => {
+    const ext = path.extname(filePath).toLowerCase();
+    if (root.extensions.includes(ext)) {
+      files.push(toPosix(path.relative(root.path, filePath)));
+    }
+  });
+  files.sort((a, b) => a.localeCompare(b));
+  return files;
 }
 
 function listTemplates() {
@@ -1582,6 +1630,12 @@ async function handleApi(app, req, res, url) {
     return;
   }
 
+  const assetMatch = url.pathname.match(/^\/api\/assets\/([^/]+)\/(.+)$/);
+  if (req.method === 'GET' && assetMatch) {
+    serveAppAsset(app, decodeURIComponent(assetMatch[1]), decodeURIComponent(assetMatch[2]), res);
+    return;
+  }
+
   const extensionMatch = url.pathname.match(/^\/api\/extensions\/([^/]+)\/(.+)$/);
   if (req.method === 'GET' && extensionMatch) {
     const extensionId = decodeURIComponent(extensionMatch[1]);
@@ -1652,6 +1706,35 @@ async function handleApi(app, req, res, url) {
   }
 
   sendJson(res, 404, { error: 'API route not found.' });
+}
+
+function serveAppAsset(app, assetId, rawName, res) {
+  const root = app.assetRoots.find((entry) => entry.id === assetId);
+  if (!root) {
+    sendJson(res, 404, { error: 'Asset root not found.' });
+    return;
+  }
+  const name = safeRelativeName(rawName);
+  if (!name) {
+    sendJson(res, 400, { error: 'Invalid asset path.' });
+    return;
+  }
+  const fullPath = path.normalize(path.join(root.path, name));
+  const ext = path.extname(fullPath).toLowerCase();
+  if (!isInside(root.path, fullPath) || !root.extensions.includes(ext)) {
+    sendJson(res, 403, { error: 'Asset path is not allowed.' });
+    return;
+  }
+  if (!fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile()) {
+    sendJson(res, 404, { error: 'Asset not found.' });
+    return;
+  }
+  res.writeHead(200, {
+    'Content-Type': getContentType(fullPath),
+    'X-Content-Type-Options': 'nosniff',
+    'Cache-Control': 'no-store'
+  });
+  fs.createReadStream(fullPath).pipe(res);
 }
 
 function startServer(app, host, port, options = {}) {

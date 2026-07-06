@@ -2554,6 +2554,21 @@ function renderCollectionGrid(collection) {
     const card = document.createElement('button');
     card.type = 'button';
     card.className = `collection-grid-card${state.selectedKey === getCollectionItemPath(collection, index) ? ' is-active' : ''}`;
+    const imageAsset = findCollectionImageAsset(collection, item);
+    if (getCollectionImageConfig(collection)) {
+      const imageFrame = document.createElement('span');
+      imageFrame.className = `collection-grid-card__image${imageAsset ? ' is-loaded' : ''}`;
+      if (imageAsset) {
+        const image = document.createElement('img');
+        image.src = imageAsset.url;
+        image.alt = imageAsset.name || getCollectionItemTitle(collection, item, index);
+        image.loading = 'lazy';
+        imageFrame.append(image);
+      } else {
+        imageFrame.textContent = 'No image';
+      }
+      card.append(imageFrame);
+    }
     const title = document.createElement('span');
     title.className = 'collection-grid-card__title';
     title.textContent = getCollectionItemTitle(collection, item, index);
@@ -2568,6 +2583,77 @@ function renderCollectionGrid(collection) {
     grid.append(card);
   });
   collectionEditorBody.append(grid);
+}
+
+function getCollectionImageConfig(collection) {
+  const config = collection?.image || collection?.thumbnail || collection?.previewImage || null;
+  if (!config) {
+    return null;
+  }
+  return typeof config === 'string' ? { path: config } : config;
+}
+
+function findCollectionImageAsset(collection, item) {
+  const config = getCollectionImageConfig(collection);
+  if (!config) {
+    return null;
+  }
+  const names = getCollectionImageCandidateNames(config, item);
+  if (!names.length) {
+    return null;
+  }
+  const roots = ensureArray(config.roots || config.assetRoots || config.root || 'mission-images', { scalar: true });
+  const extensions = ensureArray(config.extensions || ['.png', '.PNG', '.jpg', '.JPG', '.jpeg', '.JPEG'], { scalar: true });
+  const appAssets = ensureArray(state.app?.assets);
+  for (const rootId of roots) {
+    const root = appAssets.find((entry) => entry.id === rootId);
+    const files = ensureArray(root?.files, { scalar: true });
+    for (const name of names) {
+      for (const ext of extensions) {
+        const wanted = `${name}${ext}`.toLowerCase();
+        const match = files.find((file) => String(file).toLowerCase() === wanted);
+        if (match) {
+          return {
+            name,
+            url: `/api/assets/${encodeURIComponent(rootId)}/${encodeURIComponent(match)}`
+          };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function getCollectionImageCandidateNames(config, item) {
+  const paths = ensureArray(config.namePaths || config.paths || config.path || ['image_name', 'name', 'key'], { scalar: true });
+  const aliases = config.aliases && typeof config.aliases === 'object' ? config.aliases : {};
+  const values = [];
+  paths.forEach((pathText) => {
+    const text = String(getByPath(item, pathText) ?? '').trim();
+    if (!text) {
+      return;
+    }
+    values.push(text);
+    if (aliases[text]) {
+      values.push(aliases[text]);
+    }
+    const stripped = text.replace(/[!\uFF01?\uFF1F\u3002.,\uFF0C\u3001;\uFF1B:\uFF1A]+$/, '').trim();
+    if (stripped && stripped !== text) {
+      values.push(stripped);
+      if (aliases[stripped]) {
+        values.push(aliases[stripped]);
+      }
+    }
+  });
+  const seen = new Set();
+  return values.filter((value) => {
+    const key = String(value || '').trim();
+    if (!key || seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 function getSidepanelPreviewConfigs() {
