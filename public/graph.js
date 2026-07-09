@@ -22,7 +22,7 @@ function getGraphKindLabels() {
 }
 
 function showGraphContextMenu(x, y, nodeKey) {
-  if (!isDialogGraphProfile() || !nodeKey) {
+  if (!nodeKey) {
     return;
   }
   const graph = buildGraphModel();
@@ -35,7 +35,13 @@ function showGraphContextMenu(x, y, nodeKey) {
   state.selectedKey = nodeKey;
   state.selectedEdge = null;
   resetJsonDraftState();
-  renderDialogGraphContextMenu(node, graph);
+  const rendered = isDialogGraphProfile()
+    ? renderDialogGraphContextMenu(node, graph)
+    : renderGenericGraphContextMenu(node, graph);
+  if (!rendered) {
+    hideGraphContextMenu();
+    return;
+  }
   renderInspector();
   renderGraph();
   graphContextMenu.classList.remove('hidden');
@@ -90,10 +96,32 @@ function renderDialogGraphContextMenu(node, graph) {
     ? getGraphLabel('contextDeleteNode', '删除节点')
     : getGraphLabel('contextDeleteOption', '删除选项');
   graphContextMenu.append(remove);
+  return true;
+}
+
+function renderGenericGraphContextMenu(node, graph) {
+  const actions = getGenericGraphMutationActions(node, graph);
+  if (!actions.length) {
+    return false;
+  }
+
+  graphContextMenu.innerHTML = '';
+  actions.forEach((action) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.action = action.id;
+    button.textContent = action.label || getGenericGraphMutationLabel(action);
+    if (action.type === 'delete' || action.danger) {
+      button.className = 'danger';
+    }
+    graphContextMenu.append(button);
+  });
+  return true;
 }
 
 function runGraphContextAction(action, kind) {
   if (!isDialogGraphProfile()) {
+    runGenericGraphContextAction(action);
     return;
   }
   const graph = buildGraphModel();
@@ -122,6 +150,76 @@ function runGraphContextAction(action, kind) {
   }
 
   hideGraphContextMenu();
+}
+
+function runGenericGraphContextAction(actionId) {
+  const graph = buildGraphModel();
+  const node = graph.nodeMap.get(state.contextGraphNodeKey || state.selectedKey);
+  if (!node || isVirtualGraphNode(node)) {
+    hideGraphContextMenu();
+    return;
+  }
+
+  const action = getGenericGraphMutationActions(node, graph).find((item) => item.id === actionId);
+  if (action) {
+    runGenericGraphMutation(node, action, graph);
+  }
+  hideGraphContextMenu();
+}
+
+function getGenericGraphMutationActions(node, graph) {
+  const configured = state.domain?.graph?.mutations || state.domain?.graph?.actions || {};
+  const collectionActions = configured[node.collection] || configured[singular(node.collection)] || [];
+  return ensureArray(collectionActions)
+    .map(normalizeGenericGraphMutation)
+    .filter((action) => action.id && isGenericGraphMutationVisible(action, node, graph));
+}
+
+function normalizeGenericGraphMutation(action) {
+  const item = typeof action === 'string' ? { type: action } : { ...(action || {}) };
+  const type = String(item.type || item.action || item.kind || item.id || '').trim();
+  return {
+    ...item,
+    id: String(item.id || type).trim(),
+    type
+  };
+}
+
+function isGenericGraphMutationVisible(action, node) {
+  const rule = action.when || action.visibleWhen;
+  if (!rule) {
+    return true;
+  }
+  if (rule.collection && String(rule.collection) !== String(node.collection)) {
+    return false;
+  }
+  const value = getByPath(node.value, rule.path || '');
+  if (rule.empty) {
+    return value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0);
+  }
+  if (rule.notEmpty) {
+    return !(value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0));
+  }
+  if (Object.prototype.hasOwnProperty.call(rule, 'equals')) {
+    return String(value) === String(rule.equals);
+  }
+  if (Array.isArray(rule.oneOf)) {
+    return rule.oneOf.map(String).includes(String(value));
+  }
+  return true;
+}
+
+function getGenericGraphMutationLabel(action) {
+  if (action.type === 'delete') {
+    return getAppLabel('delete');
+  }
+  if (action.type === 'append' || action.type === 'add-child' || action.type === 'add-reference') {
+    return getAppLabel('add');
+  }
+  if (action.type === 'chain' || action.type === 'add-next') {
+    return getGraphLabel('contextAddNext', getAppLabel('add'));
+  }
+  return action.id || getAppLabel('add');
 }
 
 function getDialogKindOptions() {
@@ -2455,8 +2553,26 @@ function fitGraphViewToContent() {
   const resetMinScale = Number(state.domain?.graph?.view?.resetMinScale ?? RESET_READABLE_MIN_SCALE);
   const scale = clampViewScale(Math.max(fitScale, Math.min(MAX_VIEW_SCALE, resetMinScale)));
   state.view.scale = scale;
-  state.view.tx = Math.round((viewport.width - contentWidth * scale) / 2);
+  const anchor = scale > fitScale + 0.001 ? getGraphResetAnchor() : null;
+  state.view.tx = anchor
+    ? Math.round(viewport.width * 0.28 - anchor.x * scale)
+    : Math.round((viewport.width - contentWidth * scale) / 2);
   state.view.ty = FIT_VIEW_PADDING;
+}
+
+function getGraphResetAnchor() {
+  if (isFreeGraph() || isBlueprintGraph()) {
+    return null;
+  }
+
+  const item = graphNodes.querySelector('.graph-node:not(.graph-node--pseudo)');
+  if (!item) {
+    return null;
+  }
+
+  const x = parseFloat(item.style.left || '0') + (item.offsetWidth || GRAPH_NODE_WIDTH) / 2;
+  const y = parseFloat(item.style.top || '0');
+  return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
 }
 
 function zoomGraphView(nextScale, pointerX, pointerY) {

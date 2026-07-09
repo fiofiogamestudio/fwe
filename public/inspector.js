@@ -576,8 +576,113 @@ function renderInspectorField(field, target, context) {
     });
   }
   wrapper.append(control);
+  appendInspectorTextareaToolbar(wrapper, field, target, control, context);
   appendFieldMeta(wrapper, field, context);
   return wrapper;
+}
+
+function appendInspectorTextareaToolbar(wrapper, field, target, control, context) {
+  if (!field.markup || control.tagName !== 'TEXTAREA') {
+    return;
+  }
+
+  const toolbar = document.createElement('div');
+  toolbar.className = 'markup-toolbar';
+  wrapper.append(toolbar);
+  loadInspectorMarkupTags(field.markup).then((tags) => {
+    if (!toolbar.isConnected) {
+      return;
+    }
+    renderInspectorMarkupToolbar(toolbar, tags, field, target, control, context);
+  }).catch(() => {
+    if (toolbar.isConnected) {
+      toolbar.innerHTML = '';
+    }
+  });
+}
+
+function normalizeInspectorMarkupConfig(config) {
+  if (config && typeof config === 'object' && !Array.isArray(config)) {
+    return {
+      domain: config.domain || 'text-markup',
+      file: config.file || 'markup.json'
+    };
+  }
+  return {
+    domain: 'text-markup',
+    file: 'markup.json'
+  };
+}
+
+function loadInspectorMarkupTags(config) {
+  const resolved = normalizeInspectorMarkupConfig(config);
+  return fetch(`/api/domains/${encodeURIComponent(resolved.domain)}/files/${encodeURIComponent(resolved.file)}`)
+    .then((response) => response.ok ? response.json() : null)
+    .then((payload) => normalizeInspectorMarkupTags(payload?.data?.tags));
+}
+
+function normalizeInspectorMarkupTags(tags) {
+  if (Array.isArray(tags)) {
+    return tags.map((tag) => ({ id: String(tag?.id || '').trim() })).filter((tag) => tag.id);
+  }
+  if (tags && typeof tags === 'object') {
+    return Object.keys(tags).map((id) => ({ id })).filter((tag) => tag.id);
+  }
+  return [];
+}
+
+function renderInspectorMarkupToolbar(toolbar, tags, field, target, control, context) {
+  toolbar.innerHTML = '';
+  if (!tags.length) {
+    return;
+  }
+
+  const label = document.createElement('span');
+  label.className = 'markup-toolbar__label';
+  label.textContent = '标记';
+  toolbar.append(label);
+
+  tags.forEach((tag) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'markup-toolbar__button';
+    button.textContent = tag.id;
+    button.title = `[${tag.id}]...[/${tag.id}]`;
+    button.addEventListener('click', () => {
+      if (wrapInspectorMarkupSelection(control, tag.id)) {
+        commitInspectorField(field, target, control, context);
+      }
+    });
+    toolbar.append(button);
+  });
+}
+
+function wrapInspectorMarkupSelection(input, tagId) {
+  const open = `[${tagId}]`;
+  const close = `[/${tagId}]`;
+  const value = input.value || '';
+  const start = input.selectionStart ?? value.length;
+  const end = input.selectionEnd ?? start;
+
+  if (value.slice(Math.max(0, start - open.length), start) === open
+    && value.slice(end, end + close.length) === close) {
+    window.alert(`当前选区已经套用了 ${tagId}。`);
+    input.focus();
+    return false;
+  }
+
+  const selected = value.slice(start, end);
+  if (selected.includes('[') || selected.includes(']')) {
+    window.alert('文本标记不支持嵌套，请先选中纯文本内容。');
+    input.focus();
+    return false;
+  }
+
+  input.value = `${value.slice(0, start)}${open}${selected}${close}${value.slice(end)}`;
+  input.focus();
+  input.selectionStart = start + open.length;
+  input.selectionEnd = start + open.length + selected.length;
+  return true;
 }
 
 function isInspectorPendingInputControl(field, control) {

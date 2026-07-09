@@ -306,6 +306,8 @@ function loadDomainConfig(ref, appDir, options = {}) {
 }
 
 function normalizeInheritedTemplateArtifacts(domain, raw, template) {
+  normalizeExplicitDefaultOverrides(domain, raw);
+
   if (domain.kind !== 'table') {
     return;
   }
@@ -332,6 +334,28 @@ function normalizeInheritedTemplateArtifacts(domain, raw, template) {
         field.path = rows;
         field.label = labelFromId(rows);
       }
+    });
+  }
+}
+
+function normalizeExplicitDefaultOverrides(domain, raw) {
+  if (Object.prototype.hasOwnProperty.call(raw.defaults || {}, 'data')) {
+    domain.defaults = {
+      ...(domain.defaults || {}),
+      data: clone(raw.defaults.data)
+    };
+  }
+
+  const rawActionDefaults = raw.actions?.defaults;
+  if (isPlainObject(rawActionDefaults)) {
+    domain.actions = {
+      ...(domain.actions || {}),
+      defaults: {
+        ...(domain.actions?.defaults || {})
+      }
+    };
+    Object.entries(rawActionDefaults).forEach(([key, value]) => {
+      domain.actions.defaults[key] = clone(value);
     });
   }
 }

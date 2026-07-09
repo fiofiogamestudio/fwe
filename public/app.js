@@ -436,7 +436,7 @@ graphViewport.addEventListener('mousedown', (event) => {
 });
 graphViewport.addEventListener('contextmenu', (event) => {
   const nodeElement = event.target?.closest?.('.graph-node');
-  if (nodeElement && isDialogGraphProfile() && !state.view.pan?.moved) {
+  if (nodeElement && state.domain?.kind === 'graph' && !isBlueprintGraph() && !state.view.pan?.moved) {
     event.preventDefault();
     event.stopPropagation();
     showGraphContextMenu(event.clientX, event.clientY, nodeElement.dataset.key);
@@ -1014,7 +1014,13 @@ function duplicateSelection() {
     const copy = clone(info.value);
     ensureUniqueIdentity(copy, info.parentPath);
     info.parent.splice(info.key + 1, 0, copy);
-    state.selectedKey = `${info.parentPath}[${info.key + 1}]`;
+    if (state.domain?.kind === 'graph') {
+      const collection = getGraphCollectionNameForPath(info.parentPath);
+      const idKey = getGraphCollectionIdKey(collection);
+      state.selectedKey = `${collection}:${copy?.[idKey]}`;
+    } else {
+      state.selectedKey = `${info.parentPath}[${info.key + 1}]`;
+    }
   } else {
     const nextKey = window.prompt(getAppLabel('duplicateAsKey'), `${String(info.key)}Copy`);
     if (!nextKey) {
@@ -1064,25 +1070,32 @@ function canDeleteSelection() {
 }
 
 function addGraphSelectionItem() {
-  const targetPath = state.domain.graph?.nodes || state.domain.model?.nodes || 'nodes';
-  const rows = ensureArray(getByPath(state.data, targetPath));
   const graph = buildGraphModel();
   const selected = graph.nodeMap.get(state.selectedKey);
-  const selectedNode = selected && !isVirtualGraphNode(selected) && selected.collection === graph.baseCollection
+  const selectedNode = selected && !isVirtualGraphNode(selected)
     ? selected
     : null;
+
+  const mutation = selectedNode ? getDefaultGenericGraphAddMutation(selectedNode, graph) : null;
+  if (mutation && runGenericGraphMutation(selectedNode, mutation, graph)) {
+    return true;
+  }
+
+  const targetPath = state.domain.graph?.nodes || state.domain.model?.nodes || 'nodes';
+  const rows = ensureArray(getByPath(state.data, targetPath));
+  const selectedBaseNode = selectedNode?.collection === graph.baseCollection ? selectedNode : null;
   const edgeRule = getPrimaryEditableGraphEdgeRule(graph.baseCollection);
   const item = createDefaultItemForPath(targetPath);
   const idKey = getGraphCollectionIdKey(graph.baseCollection);
   const itemId = item?.[idKey];
 
   pushHistory(`添加 ${targetPath}`);
-  if (selectedNode && edgeRule && itemId !== undefined && itemId !== null && itemId !== '') {
-    const previousTarget = getByPath(selectedNode.value, edgeRule.field);
+  if (selectedBaseNode && edgeRule && itemId !== undefined && itemId !== null && itemId !== '') {
+    const previousTarget = getByPath(selectedBaseNode.value, edgeRule.field);
     if (previousTarget !== undefined && previousTarget !== null && previousTarget !== '') {
       setByPath(item, edgeRule.field, previousTarget);
     }
-    setByPath(selectedNode.value, edgeRule.field, itemId);
+    setByPath(selectedBaseNode.value, edgeRule.field, itemId);
   }
   rows.push(item);
   setByPath(state.data, targetPath, rows);
@@ -1113,17 +1126,144 @@ function deleteGraphSelectionItem() {
 
   const idKey = getGraphCollectionIdKey(node.collection);
   const removedId = node.value?.[idKey] ?? node.id;
-  const edgeRule = getPrimaryEditableGraphEdgeRule(node.collection);
+  const edgeRule = node.collection === graph.baseCollection
+    ? getPrimaryEditableGraphEdgeRule(node.collection)
+    : null;
   const fallback = getGraphDeleteFallbackTarget(node, edgeRule, graph, removedId);
 
   pushHistory(`删除 ${info.path}`);
-  rewriteGraphReferences(removedId, fallback);
+  rewriteGraphReferences(node.collection, removedId, fallback);
   info.parent.splice(info.key, 1);
-  updateGraphEntryAfterDelete(removedId, fallback, graph);
+  if (node.collection === graph.baseCollection) {
+    updateGraphEntryAfterDelete(removedId, fallback, graph);
+  }
   state.selectedKey = '';
   state.selectedEdge = null;
   markDirtyAndRender(`已删除 ${info.path}`);
   return true;
+}
+
+function getDefaultGenericGraphAddMutation(node, graph) {
+  if (typeof getGenericGraphMutationActions !== 'function') {
+    return null;
+  }
+  const actions = getGenericGraphMutationActions(node, graph)
+    .filter((action) => action.type !== 'delete' && action.default !== false);
+  return actions.find((action) => action.default === true) || actions[0] || null;
+}
+
+function runGenericGraphMutation(node, action, graph = buildGraphModel()) {
+  if (!node || !action) {
+    return false;
+  }
+  if (action.type === 'delete') {
+    state.selectedKey = node.key;
+    return deleteGraphSelectionItem();
+  }
+  if (action.type === 'append' || action.type === 'add-child' || action.type === 'add-reference') {
+    return appendGenericGraphReference(node, action, graph);
+  }
+  if (action.type === 'chain' || action.type === 'add-next') {
+    return chainGenericGraphNode(node, action, graph);
+  }
+  return false;
+}
+
+function chainGenericGraphNode(node, action, graph) {
+  const edgeField = action.edge || action.field || 'next';
+  const targetCollection = action.target || action.collection || graph.baseCollection;
+  const targetPath = getGraphCollectionPath(targetCollection);
+  const rows = ensureArray(getByPath(state.data, targetPath));
+  const item = createDefaultGraphCollectionItem(targetCollection);
+  const idKey = getGraphCollectionIdKey(targetCollection);
+  const itemId = item?.[idKey];
+  if (itemId === undefined || itemId === null || itemId === '') {
+    return false;
+  }
+
+  const previousTarget = getByPath(node.value, edgeField);
+  pushHistory(action.historyLabel || `${action.label || '添加'} ${targetPath}`);
+  if (action.carry !== false && !isGraphEmptyMutationValue(previousTarget, action)) {
+    setByPath(item, action.carryTo || edgeField, previousTarget);
+  }
+  setByPath(node.value, edgeField, itemId);
+  applyGenericGraphMutationClears(node.value, action);
+  rows.push(item);
+  setByPath(state.data, targetPath, rows);
+  state.selectedKey = `${targetCollection}:${itemId}`;
+  state.selectedEdge = null;
+  markDirtyAndRender(action.doneLabel || `已添加 ${targetPath}`);
+  return true;
+}
+
+function appendGenericGraphReference(node, action) {
+  const edgeField = action.edge || action.field;
+  const targetCollection = action.target || action.collection;
+  if (!edgeField || !targetCollection) {
+    return false;
+  }
+
+  const targetPath = getGraphCollectionPath(targetCollection);
+  const rows = ensureArray(getByPath(state.data, targetPath));
+  const item = createDefaultGraphCollectionItem(targetCollection);
+  const idKey = getGraphCollectionIdKey(targetCollection);
+  const itemId = item?.[idKey];
+  if (itemId === undefined || itemId === null || itemId === '') {
+    return false;
+  }
+
+  pushHistory(action.historyLabel || `${action.label || '添加'} ${targetPath}`);
+  const current = getByPath(node.value, edgeField);
+  const refs = Array.isArray(current)
+    ? [...current]
+    : (isGraphEmptyMutationValue(current, action) ? [] : [current]);
+  refs.push(itemId);
+  setByPath(node.value, edgeField, refs);
+  applyGenericGraphMutationClears(node.value, action);
+  rows.push(item);
+  setByPath(state.data, targetPath, rows);
+  state.selectedKey = `${targetCollection}:${itemId}`;
+  state.selectedEdge = null;
+  markDirtyAndRender(action.doneLabel || `已添加 ${targetPath}`);
+  return true;
+}
+
+function applyGenericGraphMutationClears(target, action) {
+  ensureArray(action.clear, { scalar: true }).forEach((pathText) => {
+    if (action.clearValue !== undefined) {
+      setByPath(target, pathText, clone(action.clearValue));
+    } else {
+      deleteByPath(target, pathText);
+    }
+  });
+}
+
+function createDefaultGraphCollectionItem(collection) {
+  const pathText = getGraphCollectionPath(collection);
+  const item = createDefaultItemForPath(pathText);
+  const idKey = getGraphCollectionIdKey(collection);
+  if (item && typeof item === 'object' && !Array.isArray(item)
+    && (item[idKey] === undefined || item[idKey] === null || item[idKey] === '')) {
+    item[idKey] = getNextNumericId(getByPath(state.data, pathText), idKey);
+  }
+  return item;
+}
+
+function getGraphCollectionPath(collection) {
+  const model = state.domain.model || {};
+  const graph = state.domain.graph || {};
+  if (collection === getBaseGraphCollection()) {
+    return graph.nodes || model.nodes || collection;
+  }
+  return graph[collection] || model[collection] || collection;
+}
+
+function isGraphEmptyMutationValue(value, action = {}) {
+  const configured = ensureArray(action.emptyValues, { scalar: true });
+  if (configured.length && configured.map(String).includes(String(value))) {
+    return true;
+  }
+  return value === undefined || value === null || value === '';
 }
 
 function getPathInfo(pathText) {
@@ -1180,10 +1320,11 @@ function isValidGraphDeleteFallback(value, edgeRule, graph, removedId) {
   return !!graph?.nodeMap?.has?.(`${targetCollection}:${value}`);
 }
 
-function rewriteGraphReferences(removedId, fallback) {
+function rewriteGraphReferences(removedCollection, removedId, fallback) {
   (state.domain.graph?.edges || [])
     .map(parseEdgeRule)
     .filter(Boolean)
+    .filter((rule) => rule.targetCollection === removedCollection)
     .forEach((rule) => {
       const sourcePath = state.domain.model?.[rule.sourceCollection] || rule.sourceCollection;
       ensureArray(getByPath(state.data, sourcePath)).forEach((item) => {
@@ -1301,11 +1442,16 @@ function createDefaultItemForPath(pathText) {
     return item;
   }
   if (state.domain.kind === 'graph') {
-    const idKey = state.domain.graph?.nodeId || 'id';
-    return {
-      [idKey]: getNextNumericId(getByPath(state.data, pathText), idKey),
-      [state.domain.graph?.nodeKind || 'kind']: state.domain.defaults?.nodeKind ?? 0
+    const collection = getGraphCollectionNameForPath(pathText);
+    const idKey = getGraphCollectionIdKey(collection);
+    const kindKey = collection === getBaseGraphCollection() ? (state.domain.graph?.nodeKind || 'kind') : '';
+    const item = {
+      [idKey]: getNextNumericId(getByPath(state.data, pathText), idKey)
     };
+    if (kindKey) {
+      item[kindKey] = state.domain.defaults?.nodeKind ?? 0;
+    }
+    return item;
   }
   return {};
 }
@@ -1344,9 +1490,27 @@ function getCollectionIdentityKey(collectionPath) {
     return state.domain.model?.rowId || 'id';
   }
   if (state.domain.kind === 'graph') {
-    return state.domain.graph?.nodeId || 'id';
+    const collection = getGraphCollectionNameForPath(collectionPath);
+    return getGraphCollectionIdKey(collection);
   }
   return state.domain.source?.identity || 'id';
+}
+
+function getGraphCollectionNameForPath(collectionPath) {
+  const model = state.domain.model || {};
+  const graph = state.domain.graph || {};
+  const match = Object.entries(model).find(([, pathText]) => pathText === collectionPath);
+  if (match) {
+    return match[0];
+  }
+  const graphMatch = Object.entries(graph).find(([, pathText]) => pathText === collectionPath);
+  if (graphMatch) {
+    return graphMatch[0];
+  }
+  if (collectionPath === (graph.nodes || model.nodes || 'nodes')) {
+    return getBaseGraphCollection();
+  }
+  return collectionPath;
 }
 
 function getNextIdentityValue(rows, idKey, prefix) {
