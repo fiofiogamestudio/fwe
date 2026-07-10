@@ -17,7 +17,9 @@
     "start": "node bin/fwe.js --app examples/app.fwe.json",
     "syntax": "node --check public/runtime.js && node --check public/graph.js && node --check public/inspector.js && node --check public/app.js && node --check public/views/workbench.js && node --check src/server.js && node --check src/dsl.js && node --check src/extensions.js",
     "check": "npm run syntax && node bin/fwe.js --check --app examples/app.fwe.json",
-    "test": "npm run check",
+    "unit": "node --test test/*.test.js",
+    "test": "npm run check && npm run unit",
+    "test:browser": "node test/browser-smoke.js --app examples/app.fwe.json",
     "pack:dry": "npm pack --dry-run"
   },
   "keywords": [
