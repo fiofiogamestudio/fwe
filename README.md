@@ -8,8 +8,7 @@ Requirements: Node.js 18 or newer.
 
 ```powershell
 npm start
-npm run check
-npm run syntax
+npm test
 node bin/fwe.js --explain flow --app examples/app.fwe.json
 ```
 
@@ -309,6 +308,39 @@ Client extension:
 `layout` contains the selected runtime view and layout id. `workbench` contains normalized collections, the active collection, current workbench state, and `getRows()`. The normal view context still includes `app`, `domain`, `view`, `file`, `data`, `selection`, path helpers, history helpers, built-in render helpers, refs, and DOM hosts.
 
 Use a full custom view only when the domain is not a workbench at all.
+
+## Server API Extensions
+
+Trusted host extensions can expose project-specific HTTP endpoints without replacing the fwe server. Each handler is restricted to its registered `/api/...` prefix.
+
+```js
+module.exports = (fwe) => {
+  fwe.registerApi('/api/project', async ({ req, res, url, sendJson, readBody, parseJson }) => {
+    if (req.method === 'GET' && url.pathname === '/api/project/status') {
+      sendJson(200, { ready: true });
+      return true;
+    }
+    if (req.method === 'POST' && url.pathname === '/api/project/run') {
+      const input = parseJson(await readBody());
+      sendJson(200, { input });
+      return true;
+    }
+    return false;
+  });
+};
+```
+
+Return `true` or omit the return value after handling a request. Return `false` to try the next matching parent prefix and then fwe's normal 404 response. More specific prefixes run first; duplicate prefixes and fwe's reserved `/api/app`, `/api/domains`, and `/api/extensions` routes are rejected. API extensions run in the server process and are trusted code; keep game-specific paths and persistence rules in the host repository.
+
+## Tests
+
+```powershell
+npm test
+npm run test:browser
+npm run pack:dry
+```
+
+`npm test` runs syntax, example compilation, and unit tests on Node.js 18 or newer. `test:browser` additionally requires Node.js 22 or newer and a local Chrome or Chromium installation; it checks every example domain for browser errors, layout overflow, and graph add/undo behavior.
 
 ## Form Extensions
 

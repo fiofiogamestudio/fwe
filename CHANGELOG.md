@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0
+
+- Added scoped server API handlers for trusted host extensions through `registerApi`.
+- Fixed workbench inspector form resolution after a collection changes the active selection.
+- Added unit tests for extension routing and source persistence plus a reusable headless-browser smoke runner.
+
 ## 0.1.0
 
 - Added the standalone fwe CLI and local editor server.

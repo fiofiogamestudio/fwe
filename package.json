@@ -1,6 +1,6 @@
 {
   "name": "fwe",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A small generic file-workspace editor runtime.",
   "type": "commonjs",
   "main": "src/server.js",
