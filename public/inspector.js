@@ -363,6 +363,13 @@ function resolveInspectorForm(context) {
       || forms.graphNode
       || forms.default;
   }
+  if (context.collection) {
+    const collection = getWorkbenchCollections().find((item) => item.id === context.collection);
+    const formId = collection?.form || collection?.formId;
+    if (formId && forms[formId]) {
+      return forms[formId];
+    }
+  }
   return forms[context.kind] || forms.default;
 }
 

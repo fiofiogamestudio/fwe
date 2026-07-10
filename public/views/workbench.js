@@ -166,13 +166,13 @@
       return issues;
     },
     render(ctx) {
-      ctx.renderInspector();
       const layoutInfo = resolveLayout(ctx.view, ctx.domain);
       const renderer = layoutInfo.renderer;
       if (!renderer || typeof renderer.render !== 'function') {
         throw new Error(`Workbench layout "${layoutInfo.id}" is not registered.`);
       }
       renderer.render(ctx, layoutInfo, buildWorkbench(layoutInfo, ctx));
+      ctx.renderInspector();
     }
   });
 }());
