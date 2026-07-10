@@ -1,9 +1,12 @@
 const path = require('path');
 
+const RESERVED_API_PREFIXES = ['/api/app', '/api/domains', '/api/extensions'];
+
 function createFweExtensionRegistry() {
   const annotations = new Map();
   const views = new Map();
   const sources = new Map();
+  const apis = [];
 
   function registerAnnotation(name, handler = {}) {
     const key = normalizeAnnotationName(name);
@@ -32,13 +35,31 @@ function createFweExtensionRegistry() {
     return api;
   }
 
+  function registerApi(prefix, handler) {
+    const normalizedPrefix = normalizeApiPrefix(prefix);
+    if (!normalizedPrefix) {
+      throw new Error(`Invalid API prefix: ${prefix}`);
+    }
+    if (typeof handler !== 'function') {
+      throw new Error(`API handler for "${normalizedPrefix}" must be a function.`);
+    }
+    if (apis.some((entry) => entry.prefix === normalizedPrefix)) {
+      throw new Error(`API prefix is already registered: ${normalizedPrefix}`);
+    }
+    apis.push({ prefix: normalizedPrefix, handler });
+    apis.sort((left, right) => right.prefix.length - left.prefix.length);
+    return api;
+  }
+
   const api = {
     annotation: registerAnnotation,
     registerAnnotation,
     view: registerView,
     registerView,
     source: registerSource,
-    registerSource
+    registerSource,
+    api: registerApi,
+    registerApi
   };
   installExtensionCompatibilityAliases(api, registerView);
 
@@ -59,6 +80,19 @@ function createFweExtensionRegistry() {
     },
     getSource(name) {
       return sources.get(normalizeExtensionName(name)) || null;
+    },
+    async handleApi(payload) {
+      const pathname = String(payload?.url?.pathname || '');
+      for (const entry of apis) {
+        if (pathname !== entry.prefix && !pathname.startsWith(`${entry.prefix}/`)) {
+          continue;
+        }
+        const handled = await entry.handler(payload);
+        if (handled !== false) {
+          return true;
+        }
+      }
+      return false;
     },
     compileView(payload) {
       const view = readExtensionViewPayload(payload);
@@ -134,6 +168,17 @@ function normalizeAnnotationName(name) {
 function normalizeExtensionName(name) {
   const value = String(name || '').trim();
   if (!/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(value)) {
+    return '';
+  }
+  return value;
+}
+
+function normalizeApiPrefix(prefix) {
+  const value = String(prefix || '').trim().replace(/\/+$/, '');
+  if (!/^\/api\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*$/.test(value)) {
+    return '';
+  }
+  if (RESERVED_API_PREFIXES.some((prefix) => value === prefix || value.startsWith(`${prefix}/`))) {
     return '';
   }
   return value;

@@ -1637,6 +1637,20 @@ async function handleApi(app, req, res, url) {
     }
   }
 
+  const handledByExtension = await app.extensionRegistry?.handleApi?.({
+    app,
+    req,
+    res,
+    url,
+    sendJson: (status, data) => sendJson(res, status, data),
+    sendText: (status, text, contentType) => sendText(res, status, text, contentType),
+    readBody: () => readBody(req),
+    parseJson: parseRequestJson
+  });
+  if (handledByExtension) {
+    return;
+  }
+
   sendJson(res, 404, { error: 'API route not found.' });
 }
 
