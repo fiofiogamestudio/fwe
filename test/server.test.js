@@ -4,11 +4,16 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
+const DEFAULT_TEST_HOST = '127.0.0.1';
+
 const {
   buildApiErrorPayload,
   listFiles,
   loadAppConfig,
+  main,
+  parseArgs,
   readDomainFile,
+  startServer,
   writeDomainFile
 } = require('../src/server');
 
@@ -28,6 +33,12 @@ test('API error payload preserves structured validation issues', () => {
   assert.deepEqual(buildApiErrorPayload(new Error('Plain failure.')), {
     error: 'Plain failure.'
   });
+});
+
+test('FWE_NO_BROWSER keeps batch launches headless even when they request --open', () => {
+  assert.equal(parseArgs(['--open'], { FWE_NO_BROWSER: '1' }).open, false);
+  assert.equal(parseArgs([], { FWE_OPEN_BROWSER: '1' }).open, true);
+  assert.equal(parseArgs(['--no-open'], { FWE_OPEN_BROWSER: '1' }).open, false);
 });
 
 test('built-in folder-json source lists, reads, and writes inside its workspace', (t) => {
@@ -111,6 +122,47 @@ test('custom source revision tokens round-trip through read and write results', 
     revision: opened.revision
   });
   assert.equal(saved.revision, 'rev-2');
+});
+
+test('CLI reuses the running app and rejects a different app on the same port', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fwe-start-test-'));
+  const workspace = path.join(root, 'workspace');
+  fs.mkdirSync(workspace, { recursive: true });
+  writeJson(path.join(root, 'domain.fwe.json'), {
+    id: 'settings',
+    kind: 'document',
+    title: 'Settings',
+    source: { type: 'single-json', path: '.', fileName: 'settings.json' },
+    model: { type: 'object' }
+  });
+  const appPath = path.join(root, 'app.fwe.json');
+  const otherAppPath = path.join(root, 'other.fwe.json');
+  writeJson(appPath, {
+    id: 'start-test',
+    title: 'Start Test',
+    workspace: './workspace',
+    domains: ['./domain.fwe.json']
+  });
+  writeJson(otherAppPath, {
+    id: 'other-start-test',
+    title: 'Other Start Test',
+    workspace: './workspace',
+    domains: ['./domain.fwe.json']
+  });
+
+  const app = loadAppConfig(appPath);
+  const server = await startServer(app, DEFAULT_TEST_HOST, 0, { open: false });
+  const port = server.address().port;
+  t.after(async () => {
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  await main(['--app', appPath, '--host', DEFAULT_TEST_HOST, '--port', String(port), '--no-open']);
+  await assert.rejects(
+    main(['--app', otherAppPath, '--host', DEFAULT_TEST_HOST, '--port', String(port), '--no-open']),
+    /already serving "Start Test"/
+  );
 });
 
 function readJson(file) {

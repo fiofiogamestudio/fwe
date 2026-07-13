@@ -7,17 +7,18 @@
 Requirements: Node.js 18 or newer.
 
 ```powershell
-npm start
+start.bat
 npm test
 node bin/fwe.js --explain flow --app examples/app.fwe.json
 ```
 
-`npm start` serves the bundled example app. By default it prints the local URL and does not open a browser automatically. Use `node bin/fwe.js --app examples/app.fwe.json --open` when you want fwe to open the browser for you.
+`start.bat` is the canonical Windows launcher. It serves the bundled example app and opens the browser automatically. `npm start` provides the same behavior. Pass `--no-open` or set `FWE_NO_BROWSER=1` when you only want the server. If the same app is already running, fwe reuses it; if the port belongs to another app or service, fwe stops with an explicit error instead of opening the wrong page.
 
 ## Project Layout
 
 | Path | Purpose |
 | --- | --- |
+| `start.bat` | canonical Windows launcher for the bundled example app |
 | `bin/fwe.js` | CLI entry point |
 | `src/` | server, source loading, DSL compilation, and extension loading |
 | `public/runtime.js` | browser registry API for views, forms, slots, and workbench layouts |
@@ -66,6 +67,7 @@ The canonical names are `source`, `model`, `view`, `form`, `modes`, `layout`, an
 Run directly:
 
 ```powershell
+start.bat
 node bin/fwe.js --app examples/app.fwe.json
 node bin/fwe.js --check --app examples/app.fwe.json
 node bin/fwe.js --explain flow --app examples/app.fwe.json

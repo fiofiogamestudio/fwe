@@ -14,14 +14,15 @@ const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 3219;
 const BODY_LIMIT = 8 * 1024 * 1024;
 
-function parseArgs(argv) {
+function parseArgs(argv, env = process.env) {
+  const noBrowser = env.FWE_NO_BROWSER === '1';
   const args = {
-    app: process.env.FWE_APP || 'fwe.app.json',
-    host: process.env.FWE_HOST || DEFAULT_HOST,
-    port: process.env.PORT || process.env.FWE_PORT || '',
+    app: env.FWE_APP || 'fwe.app.json',
+    host: env.FWE_HOST || DEFAULT_HOST,
+    port: env.PORT || env.FWE_PORT || '',
     check: false,
     explain: '',
-    open: process.env.FWE_OPEN_BROWSER === '1'
+    open: !noBrowser && env.FWE_OPEN_BROWSER === '1'
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -47,6 +48,10 @@ function parseArgs(argv) {
     }
   }
 
+  if (noBrowser) {
+    args.open = false;
+  }
+
   return args;
 }
 
@@ -70,7 +75,8 @@ Options:
 
 function urlForBrowser(host, port) {
   const browserHost = host === '0.0.0.0' || host === '::' ? DEFAULT_HOST : host;
-  return `http://${browserHost}:${port}`;
+  const urlHost = browserHost.includes(':') ? `[${browserHost}]` : browserHost;
+  return `http://${urlHost}:${port}`;
 }
 
 function openBrowser(url) {
@@ -86,10 +92,72 @@ function openBrowser(url) {
       detached: true,
       stdio: 'ignore'
     });
+    child.once('error', (error) => {
+      console.warn(`[fwe] Could not open browser automatically: ${error.message}`);
+    });
     child.unref();
   } catch (error) {
     console.warn(`[fwe] Could not open browser automatically: ${error.message}`);
   }
+}
+
+function requestPublicApp(browserUrl, timeoutMs = 1200) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const request = http.get(`${browserUrl}/api/app`, { timeout: timeoutMs }, (response) => {
+      if (response.statusCode !== 200) {
+        response.resume();
+        finish(null);
+        return;
+      }
+
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => {
+        body += chunk;
+        if (body.length > BODY_LIMIT) {
+          response.destroy();
+          finish(null);
+        }
+      });
+      response.once('error', () => finish(null));
+      response.on('end', () => {
+        try {
+          finish(JSON.parse(stripBom(body)));
+        } catch {
+          finish(null);
+        }
+      });
+    });
+    request.once('timeout', () => request.destroy());
+    request.once('error', () => finish(null));
+  });
+}
+
+function reuseRunningApp(app, runningApp, browserUrl, port, options = {}) {
+  if (!runningApp) return false;
+  if (runningApp.id !== app.id) {
+    const owner = runningApp.title ? ` "${runningApp.title}"` : '';
+    throw new Error(`Port ${port} is already serving${owner}, not "${app.title}".`);
+  }
+
+  const expectedRevision = app.labels && app.labels.editorRevision;
+  const runningRevision = runningApp.labels && runningApp.labels.editorRevision;
+  if (expectedRevision && runningRevision !== expectedRevision) {
+    throw new Error(`"${app.title}" is already running on port ${port}, but its revision is different. Stop the old server and start again.`);
+  }
+
+  console.log(`[fwe] ${app.title} is already running at ${browserUrl}`);
+  if (options.open) {
+    console.log(`[fwe] Opening browser: ${browserUrl}`);
+    openBrowser(browserUrl);
+  }
+  return true;
 }
 
 function stripBom(text) {
@@ -1679,16 +1747,24 @@ function startServer(app, host, port, options = {}) {
     }
   });
 
-  server.listen(port, host, () => {
-    const browserUrl = urlForBrowser(host, port);
-    console.log(`[fwe] ${app.title} running at ${browserUrl}`);
-    console.log(`[fwe] app: ${app.appPath}`);
-    console.log(`[fwe] workspace: ${app.workspaceDir}`);
-    console.log(`[fwe] domains: ${app.domains.map((domain) => `${domain.id}:${domain.kind}`).join(', ')}`);
-    if (options.open) {
-      console.log(`[fwe] Opening browser: ${browserUrl}`);
-      openBrowser(browserUrl);
-    }
+  return new Promise((resolve, reject) => {
+    const onError = (error) => reject(error);
+    server.once('error', onError);
+    server.listen(port, host, () => {
+      server.removeListener('error', onError);
+      const address = server.address();
+      const actualPort = address && typeof address === 'object' ? address.port : port;
+      const browserUrl = urlForBrowser(host, actualPort);
+      console.log(`[fwe] ${app.title} running at ${browserUrl}`);
+      console.log(`[fwe] app: ${app.appPath}`);
+      console.log(`[fwe] workspace: ${app.workspaceDir}`);
+      console.log(`[fwe] domains: ${app.domains.map((domain) => `${domain.id}:${domain.kind}`).join(', ')}`);
+      if (options.open) {
+        console.log(`[fwe] Opening browser: ${browserUrl}`);
+        openBrowser(browserUrl);
+      }
+      resolve(server);
+    });
   });
 }
 
@@ -1742,16 +1818,37 @@ async function main(argv) {
     return;
   }
 
-  startServer(app, host, port, { open: args.open });
+  const browserUrl = urlForBrowser(host, port);
+  const runningApp = await requestPublicApp(browserUrl);
+  if (reuseRunningApp(app, runningApp, browserUrl, port, { open: args.open })) {
+    return;
+  }
+
+  try {
+    await startServer(app, host, port, { open: args.open });
+  } catch (error) {
+    if (error && error.code === 'EADDRINUSE') {
+      const racedApp = await requestPublicApp(browserUrl);
+      if (reuseRunningApp(app, racedApp, browserUrl, port, { open: args.open })) {
+        return;
+      }
+      throw new Error(`Port ${port} is already in use by another or unresponsive service.`);
+    }
+    throw error;
+  }
 }
 
 module.exports = {
   main,
+  parseArgs,
   loadAppConfig,
   loadDomainConfig,
   explainDomain,
   listFiles,
   readDomainFile,
   writeDomainFile,
-  buildApiErrorPayload
+  buildApiErrorPayload,
+  requestPublicApp,
+  reuseRunningApp,
+  startServer
 };
