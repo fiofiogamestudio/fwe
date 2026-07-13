@@ -1197,6 +1197,7 @@ function normalizeSourceReadResult(result, rawName) {
       name: source.name || rawName,
       path: source.path || '',
       type,
+      ...(source.revision !== undefined ? { revision: String(source.revision) } : {}),
       ...(data !== undefined ? { data } : {}),
       content
     };
@@ -1240,7 +1241,8 @@ async function writeSourceProviderFile(app, domain, provider, rawName, payload) 
   return {
     ok: true,
     name: result?.name || rawName,
-    path: result?.path || ''
+    path: result?.path || '',
+    ...(result?.revision !== undefined ? { revision: String(result.revision) } : {})
   };
 }
 
@@ -1557,6 +1559,14 @@ function sendText(res, status, text) {
   res.end(text);
 }
 
+function buildApiErrorPayload(error) {
+  const payload = { error: error?.message || 'Internal server error.' };
+  if (Array.isArray(error?.issues)) {
+    payload.issues = error.issues;
+  }
+  return payload;
+}
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let body = '';
@@ -1665,7 +1675,7 @@ function startServer(app, host, port, options = {}) {
       serveStatic(url.pathname, res);
     } catch (error) {
       const status = error.status || 500;
-      sendJson(res, status, { error: error.message || 'Internal server error.' });
+      sendJson(res, status, buildApiErrorPayload(error));
     }
   });
 
@@ -1742,5 +1752,6 @@ module.exports = {
   explainDomain,
   listFiles,
   readDomainFile,
-  writeDomainFile
+  writeDomainFile,
+  buildApiErrorPayload
 };

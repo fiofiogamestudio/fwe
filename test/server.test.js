@@ -4,7 +4,31 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
-const { listFiles, loadAppConfig, readDomainFile, writeDomainFile } = require('../src/server');
+const {
+  buildApiErrorPayload,
+  listFiles,
+  loadAppConfig,
+  readDomainFile,
+  writeDomainFile
+} = require('../src/server');
+
+test('API error payload preserves structured validation issues', () => {
+  const error = Object.assign(new Error('Validation failed.'), {
+    status: 400,
+    issues: [
+      { path: 'items[0].id', message: 'ID is required.' },
+      { path: 'items[1].name', message: 'Name is required.', level: 'warning' }
+    ]
+  });
+
+  assert.deepEqual(buildApiErrorPayload(error), {
+    error: 'Validation failed.',
+    issues: error.issues
+  });
+  assert.deepEqual(buildApiErrorPayload(new Error('Plain failure.')), {
+    error: 'Plain failure.'
+  });
+});
 
 test('built-in folder-json source lists, reads, and writes inside its workspace', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fwe-server-test-'));
@@ -39,6 +63,54 @@ test('built-in folder-json source lists, reads, and writes inside its workspace'
 
   writeDomainFile(app, domain, 'items.json', { data: { items: [{ id: 1, name: 'Changed' }] } });
   assert.equal(readJson(path.join(dataDir, 'items.json')).items[0].name, 'Changed');
+});
+
+test('custom source revision tokens round-trip through read and write results', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fwe-source-revision-test-'));
+  fs.mkdirSync(path.join(root, 'workspace'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'revision-source.js'), [
+    'module.exports = function register(fwe) {',
+    "  fwe.registerSource('revision-source', {",
+    "    list() { return [{ name: 'data.json', exists: true }]; },",
+    "    read() { return { name: 'data.json', type: 'json', data: { value: 1 }, revision: 'rev-1' }; },",
+    '    write(ctx, name, payload) {',
+    "      if (payload.revision !== 'rev-1') throw new Error('revision was not forwarded');",
+    "      return { ok: true, name, revision: 'rev-2' };",
+    '    }',
+    '  });',
+    '};',
+    ''
+  ].join('\n'), 'utf8');
+  writeJson(path.join(root, 'domain.fwe.json'), {
+    id: 'revision-data',
+    kind: 'document',
+    title: 'Revision data',
+    source: { type: 'revision-source', path: '.' },
+    model: { type: 'object' }
+  });
+  writeJson(path.join(root, 'app.fwe.json'), {
+    id: 'revision-test-app',
+    title: 'Revision Test',
+    workspace: './workspace',
+    extensions: ['./revision-source.js'],
+    domains: ['./domain.fwe.json']
+  });
+  const previous = process.cwd();
+  process.chdir(root);
+  t.after(() => {
+    process.chdir(previous);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  const app = loadAppConfig('app.fwe.json');
+  const domain = app.domains[0];
+  const opened = await readDomainFile(app, domain, 'data.json');
+  assert.equal(opened.revision, 'rev-1');
+  const saved = await writeDomainFile(app, domain, 'data.json', {
+    data: opened.data,
+    revision: opened.revision
+  });
+  assert.equal(saved.revision, 'rev-2');
 });
 
 function readJson(file) {

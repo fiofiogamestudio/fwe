@@ -38,6 +38,7 @@ const state = {
     textBaseline: null,
     dragBaseline: null
   },
+  serverDiagnostics: [],
   dirty: false
 };
 
@@ -73,10 +74,13 @@ const DEFAULT_LABELS = {
   createdDraft: '已创建草稿',
   noFileSelected: '未选择文件',
   noFileToSave: '没有可保存的文件',
+  newDisabled: '当前数据域不允许新建文件',
   newFileName: '新文件名',
   openOrCreateFile: '打开或新建一个文件。',
   textDirectEdit: '文本文件在左侧直接编辑。',
   saveBlocked: '保存被阻止：{count} 个错误',
+  saveFailed: '保存失败：{message}',
+  saveFailedWithIssues: '保存失败：{count} 个服务端校验错误',
   jsonDraftChanged: 'JSON 草稿已修改',
   dirtyText: '已修改',
   dirty: '已修改 - {title}',
@@ -365,6 +369,7 @@ jsonEditor.addEventListener('input', () => {
 });
 textView.addEventListener('input', () => {
   if (state.domain?.kind === 'text') {
+    clearServerDiagnostics();
     if (!state.history.textBaseline) {
       state.history.textBaseline = createHistorySnapshot('编辑文本');
       pushHistorySnapshot(state.history.textBaseline);
@@ -633,6 +638,7 @@ async function selectDomain(domain) {
   resetJsonDraftState();
   state.view.resetPending = true;
   state.dirty = false;
+  clearServerDiagnostics();
   resetHistory();
   domainSelect.value = domain.id;
   renderDomainSummary();
@@ -671,7 +677,11 @@ async function openSelectedFile(options = {}) {
   }
 
   const result = await api(`/api/domains/${encodeURIComponent(state.domain.id)}/files/${encodeURIComponent(state.file.name)}`);
-  state.file = { name: result.name, path: result.path };
+  state.file = {
+    name: result.name,
+    path: result.path,
+    ...(result.revision !== undefined ? { revision: String(result.revision) } : {})
+  };
   if (result.type === 'text') {
     state.text = result.content || '';
     state.data = null;
@@ -685,20 +695,26 @@ async function openSelectedFile(options = {}) {
   resetJsonDraftState();
   state.view.resetPending = true;
   state.dirty = false;
+  clearServerDiagnostics();
   resetHistory();
   setStatus(`${getAppLabel('opened')} ${state.file.name}`);
   render();
 }
 
 async function createFile() {
+  if (!domainAllowsNewFile(state.domain)) {
+    setStatus(getAppLabel('newDisabled'), true);
+    updateActionButtons();
+    return false;
+  }
   if (!confirmDiscardChanges()) {
-    return;
+    return false;
   }
   const defaults = state.domain.defaults || {};
   const fallback = defaults.fileName || (state.domain.kind === 'text' ? 'new.txt' : 'new.json');
   const name = window.prompt(getAppLabel('newFileName'), fallback);
   if (!name) {
-    return;
+    return false;
   }
 
   state.file = { name };
@@ -710,6 +726,7 @@ async function createFile() {
   resetJsonDraftState();
   state.view.resetPending = true;
   state.dirty = true;
+  clearServerDiagnostics();
   resetHistory();
   if (!state.files.some((file) => file.name === name)) {
     state.files.push({ name, exists: false });
@@ -719,6 +736,7 @@ async function createFile() {
   fileSelect.value = name;
   setStatus(`${getAppLabel('createdDraft')} ${name}`);
   render();
+  return true;
 }
 
 async function saveFile(options = {}) {
@@ -746,15 +764,44 @@ async function saveFile(options = {}) {
     payload = { data: state.data };
   }
 
-  await api(`/api/domains/${encodeURIComponent(state.domain.id)}/files/${encodeURIComponent(state.file.name)}`, {
-    method: 'PUT',
-    body: JSON.stringify(payload)
-  });
+  if (state.file.revision !== undefined) {
+    payload.revision = state.file.revision;
+  }
+
+  const savingFile = { ...state.file };
+  let saved;
+  try {
+    saved = await api(`/api/domains/${encodeURIComponent(state.domain.id)}/files/${encodeURIComponent(state.file.name)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload)
+    });
+  } catch (error) {
+    state.dirty = true;
+    state.serverDiagnostics = normalizeApiDiagnostics(error?.issues);
+    render();
+    if (state.serverDiagnostics.length) {
+      setStatus(formatAppLabel('saveFailedWithIssues', '保存失败：{count} 个服务端校验错误', {
+        count: state.serverDiagnostics.length
+      }), true);
+    } else {
+      setStatus(formatAppLabel('saveFailed', '保存失败：{message}', {
+        message: error?.message || `HTTP ${error?.status || 500}`
+      }), true);
+    }
+    return false;
+  }
   state.dirty = false;
-  setStatus(`${getAppLabel('saved')} ${state.file.name}`);
+  clearServerDiagnostics();
+  setStatus(`${getAppLabel('saved')} ${savingFile.name}`);
   await loadFiles();
+  const listedFile = state.files.find((file) => file.name === savingFile.name);
+  state.file = {
+    ...(listedFile || savingFile),
+    ...(saved?.revision !== undefined ? { revision: String(saved.revision) } : {})
+  };
   fileSelect.value = state.file.name;
   render();
+  return true;
 }
 
 function commitFocusedInspectorControl(sourceElement = null) {
@@ -798,6 +845,46 @@ function resetHistory() {
   updateActionButtons();
 }
 
+function domainAllowsNewFile(domain) {
+  return !!domain && domain.actions?.new !== false;
+}
+
+function clearServerDiagnostics() {
+  state.serverDiagnostics = [];
+}
+
+function normalizeApiDiagnostics(issues) {
+  if (!Array.isArray(issues)) {
+    return [];
+  }
+  return issues.map((issue) => {
+    if (typeof issue === 'string') {
+      return { path: '', message: issue, level: 'error', source: 'server' };
+    }
+    return {
+      ...(issue && typeof issue === 'object' ? issue : {}),
+      path: String(issue?.path || ''),
+      message: String(issue?.message || issue?.error || '服务端校验失败'),
+      level: String(issue?.level || 'error'),
+      source: 'server'
+    };
+  });
+}
+
+function mergeDiagnostics(...groups) {
+  const result = [];
+  const seen = new Set();
+  groups.flat().filter(Boolean).forEach((item) => {
+    const key = [item.level || 'error', item.path || '', item.message || ''].join('\u0000');
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    result.push(item);
+  });
+  return result;
+}
+
 function createHistorySnapshot(label = '') {
   return {
     label,
@@ -821,6 +908,7 @@ function pushHistorySnapshot(snapshot) {
   if (!snapshot?.fileName) {
     return;
   }
+  clearServerDiagnostics();
   const currentKey = JSON.stringify({
     data: snapshot.data,
     text: snapshot.text,
@@ -859,6 +947,7 @@ function redoAction() {
 }
 
 function restoreHistorySnapshot(snapshot, label) {
+  clearServerDiagnostics();
   state.data = snapshot.data === null || snapshot.data === undefined ? null : clone(snapshot.data);
   state.text = snapshot.text || '';
   state.selectedKey = snapshot.selectedKey || '';
@@ -880,6 +969,8 @@ function confirmDiscardChanges() {
 
 function updateActionButtons() {
   const hasFile = !!state.file;
+  const canCreateFile = domainAllowsNewFile(state.domain);
+  setCommandVisible(newButton, canCreateFile);
   setCommandVisible(undoButton, isActionVisible('undo'));
   setCommandVisible(redoButton, isActionVisible('redo'));
   setCommandVisible(addButton, hasSurfaceActions() && isActionVisible('add'));
@@ -889,7 +980,7 @@ function updateActionButtons() {
   selectMetaButton.textContent = getGraphLabel('metaButton', getAppLabel('metaButton'));
   undoButton.disabled = !state.history.undo.length;
   redoButton.disabled = !state.history.redo.length;
-  newButton.disabled = !state.domain;
+  newButton.disabled = !canCreateFile;
   openButton.disabled = !hasFile;
   addButton.disabled = !hasFile || state.domain?.kind === 'text' || isSidepanelPreviewActive();
   duplicateButton.disabled = !canDuplicateSelection() || isSidepanelPreviewActive();
@@ -1565,6 +1656,7 @@ function getSelectedPathInfo() {
 }
 
 function markDirtyAndRender(message) {
+  clearServerDiagnostics();
   state.dirty = true;
   resetJsonDraftState();
   setStatus(formatAppLabel('dirty', '已修改 - {title}', { title: message }));
@@ -3042,7 +3134,7 @@ function renderDiagnostics(existingDiagnostics = null) {
 
 function validateCurrent() {
   if (!state.data || state.domain?.kind === 'text') {
-    return [];
+    return [...state.serverDiagnostics];
   }
 
   const diagnostics = [];
@@ -3064,7 +3156,7 @@ function validateCurrent() {
   if (state.domain.kind === 'graph' && isBlueprintGraph()) {
     validateBlueprintGraph(diagnostics);
   }
-  return diagnostics;
+  return mergeDiagnostics(diagnostics, state.serverDiagnostics);
 }
 
 function validateBlueprintGraph(diagnostics) {
@@ -3521,7 +3613,10 @@ async function api(path, options = {}) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(data.error || `HTTP ${response.status}`);
+    const error = new Error(data.error || `HTTP ${response.status}`);
+    error.status = response.status;
+    error.issues = normalizeApiDiagnostics(data.issues);
+    throw error;
   }
   return data;
 }
