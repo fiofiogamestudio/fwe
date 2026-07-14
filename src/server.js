@@ -5,6 +5,7 @@ const { URL } = require('url');
 const { spawn } = require('child_process');
 const { compileFweDsl, collectFweDslUses } = require('./dsl');
 const { loadFweExtensions, loadFweExtensionsInto } = require('./extensions');
+const { compareDomainValues } = require('./domain-equivalence');
 
 const FWE_ROOT = path.resolve(__dirname, '..');
 const PUBLIC_DIR = path.join(FWE_ROOT, 'public');
@@ -22,6 +23,7 @@ function parseArgs(argv, env = process.env) {
     port: env.PORT || env.FWE_PORT || '',
     check: false,
     explain: '',
+    compare: [],
     open: !noBrowser && env.FWE_OPEN_BROWSER === '1'
   };
 
@@ -37,6 +39,8 @@ function parseArgs(argv, env = process.env) {
       args.check = true;
     } else if (arg === '--explain') {
       args.explain = argv[++i] || true;
+    } else if (arg === '--compare') {
+      args.compare = [argv[++i], argv[++i]];
     } else if (arg === '--open') {
       args.open = true;
     } else if (arg === '--no-open') {
@@ -70,6 +74,8 @@ Options:
   --check        Validate config and exit
   --explain <id|path>
                  Print one compiled runtime domain and exit
+  --compare <left> <right>
+                 Compile two JSON/DSL domains and verify runtime equivalence
 `);
 }
 
@@ -166,6 +172,10 @@ function stripBom(text) {
 
 function readJsonFile(fullPath) {
   return JSON.parse(stripBom(fs.readFileSync(fullPath, 'utf8')));
+}
+
+function isExistingFile(filePath) {
+  return Boolean(filePath) && fs.existsSync(filePath) && fs.statSync(filePath).isFile();
 }
 
 function writeJsonFile(fullPath, data) {
@@ -1858,7 +1868,7 @@ function explainDomain(args) {
     if (fs.existsSync(targetPath)) {
       const appDir = path.dirname(targetPath);
       const appPath = path.resolve(process.cwd(), args.app || '');
-      const appRaw = fs.existsSync(appPath) ? readJsonFile(appPath) : null;
+      const appRaw = isExistingFile(appPath) ? readJsonFile(appPath) : null;
       return loadDomainConfig(targetPath, appDir, {
         extensionEntries: appRaw ? (appRaw.extensions || appRaw.plugins || []) : [],
         extensionAppDir: appRaw ? path.dirname(appPath) : appDir
@@ -1876,6 +1886,28 @@ function explainDomain(args) {
   return domain;
 }
 
+function compareDomainConfigs(args) {
+  const [leftRef, rightRef] = args.compare || [];
+  if (!leftRef || !rightRef) {
+    throw new Error('--compare requires two domain config paths.');
+  }
+  const appPath = path.resolve(process.cwd(), args.app || '');
+  const appRaw = isExistingFile(appPath) ? readJsonFile(appPath) : null;
+  const options = {
+    extensionEntries: appRaw ? (appRaw.extensions || appRaw.plugins || []) : [],
+    extensionAppDir: appRaw ? path.dirname(appPath) : process.cwd()
+  };
+  const load = (ref) => {
+    const configPath = path.resolve(process.cwd(), ref);
+    return loadDomainConfig(configPath, path.dirname(configPath), options);
+  };
+  const comparison = compareDomainValues(load(leftRef), load(rightRef));
+  if (!comparison.equivalent) {
+    throw new Error(`Domain configs are not runtime-equivalent:\n${comparison.differences.join('\n')}`);
+  }
+  return comparison;
+}
+
 async function main(argv) {
   const args = parseArgs(argv);
   if (args.help) {
@@ -1885,6 +1917,12 @@ async function main(argv) {
 
   if (args.explain) {
     console.log(JSON.stringify(explainDomain(args), null, 2));
+    return;
+  }
+
+  if (args.compare.length > 0) {
+    compareDomainConfigs(args);
+    console.log(`[fwe] domain configs are runtime-equivalent: ${args.compare[0]} == ${args.compare[1]}`);
     return;
   }
 
@@ -1927,6 +1965,7 @@ module.exports = {
   loadAppConfig,
   loadDomainConfig,
   explainDomain,
+  compareDomainConfigs,
   listFiles,
   readDomainFile,
   writeDomainFile,

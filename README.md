@@ -71,7 +71,10 @@ start.bat
 node bin/fwe.js --app examples/app.fwe.json
 node bin/fwe.js --check --app examples/app.fwe.json
 node bin/fwe.js --explain flow --app examples/app.fwe.json
+node bin/fwe.js --compare legacy.fwe.json migrated.fwe --app examples/app.fwe.json
 ```
+
+`--compare` compiles both JSON/DSL domain files and compares their runtime behavior. Source-format metadata is ignored, while source, model, graph, refs, validation, actions, save, columns, inspector/forms, views/modes, defaults, and workbench configuration must remain equivalent.
 
 ## DSL
 
