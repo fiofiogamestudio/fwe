@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Added one canonical `start.bat` that opens the bundled example app.
+- Reused an already-running copy of the same app and rejected unrelated services on the configured port.
+
 ## 0.2.0
 
 - Added scoped server API handlers for trusted host extensions through `registerApi`.

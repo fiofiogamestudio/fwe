@@ -554,6 +554,9 @@ function renderInspectorField(field, target, context) {
   if (field.type === 'repeater') {
     return renderInspectorRepeaterField(field, target, context);
   }
+  if (field.type === 'optional-object') {
+    return renderInspectorOptionalObjectField(field, target, context);
+  }
   if (field.type === 'object' || field.type === 'group') {
     return renderInspectorObjectField(field, target, context);
   }
@@ -1047,6 +1050,59 @@ function renderInspectorRepeaterField(field, target, context) {
     setByPath(target, field.path, rows);
     afterInspectorEdit(context, field, true);
   }));
+  return host;
+}
+
+function renderInspectorOptionalObjectField(field, target, context) {
+  const host = document.createElement('div');
+  host.className = 'field field--optional-object';
+  host.append(createInspectorBlockLabel(field.label || field.path || getAppLabel('object')));
+
+  const current = getByPath(target, field.path);
+  const enabled = !!current && typeof current === 'object' && !Array.isArray(current);
+  const toggleLabel = document.createElement('label');
+  toggleLabel.className = 'field';
+  const toggle = document.createElement('input');
+  toggle.type = 'checkbox';
+  toggle.checked = enabled;
+  toggleLabel.append(toggle);
+  const toggleText = document.createElement('span');
+  toggleText.textContent = field.enableLabel || field.toggleLabel || getAppLabel('enabled', '启用');
+  toggleLabel.append(toggleText);
+  host.append(toggleLabel);
+
+  toggle.addEventListener('change', () => {
+    pushHistory(`${toggle.checked ? 'Enable' : 'Disable'} ${field.path}`);
+    if (toggle.checked) {
+      const configured = field.defaultValue;
+      const defaultValue = configured && typeof configured === 'object' && !Array.isArray(configured)
+        ? clone(configured)
+        : {};
+      setByPath(target, field.path, defaultValue);
+    } else {
+      deleteByPath(target, field.path);
+    }
+    afterInspectorEdit(context, field, true);
+  });
+
+  if (enabled) {
+    const body = document.createElement('div');
+    body.className = 'inspector-group';
+    const childContext = {
+      ...context,
+      parent: target,
+      targetPath: joinPath(context.targetPath, field.path)
+    };
+    (field.fields || []).forEach((childField) => {
+      const element = renderInspectorField(childField, current, childContext);
+      if (element) {
+        body.append(element);
+      }
+    });
+    host.append(body);
+  }
+
+  appendFieldMeta(host, field, context);
   return host;
 }
 
