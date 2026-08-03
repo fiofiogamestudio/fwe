@@ -50,6 +50,32 @@ test('saveFile catches rejected writes and retains structured diagnostics', () =
   assert.match(appSource, /error\.issues = normalizeApiDiagnostics\(data\.issues\)/);
 });
 
+test('required validation skips empty wildcard collections but reports missing fields on existing items', () => {
+  const validateRequired = loadRequiredValidator();
+
+  assert.deepEqual(validateRequired(
+    { effect_hooks: [{ commands: [] }] },
+    'effect_hooks[].commands[].commands[].kind'
+  ), []);
+  assert.deepEqual(validateRequired(
+    { effect_hooks: [{ commands: [{ commands: [] }] }] },
+    'effect_hooks[].commands[].commands[].kind'
+  ), []);
+  assert.deepEqual(validateRequired(
+    { effect_hooks: [{ commands: [{ commands: [{}] }] }] },
+    'effect_hooks[].commands[].commands[].kind'
+  ), [{
+    level: 'error',
+    path: 'effect_hooks[0].commands[0].commands[0].kind',
+    message: 'Nested command kind is required.'
+  }]);
+  assert.deepEqual(validateRequired({}, 'title'), [{
+    level: 'error',
+    path: 'title',
+    message: 'Nested command kind is required.'
+  }]);
+});
+
 test('open and save retain source revision tokens for optimistic concurrency', () => {
   const openSource = readFunctionSource('openSelectedFile');
   const saveSource = readFunctionSource('saveFile');
@@ -71,6 +97,27 @@ function loadFunction(name) {
   const context = {};
   vm.runInNewContext(`${readFunctionSource(name)}\nresult = ${name};`, context);
   return context.result;
+}
+
+function loadRequiredValidator() {
+  const names = [
+    'validateObjectRule',
+    'pathContainsExpansion',
+    'pushDiagnostic',
+    'getByPath',
+    'collectPathValues',
+    'formatPathParts',
+    'parsePathParts',
+    'ensureArray'
+  ];
+  const context = { state: { data: null } };
+  vm.runInNewContext(`${names.map(readFunctionSource).join('\n')}\nresult = validateObjectRule;`, context);
+  return (data, pathText) => {
+    context.state.data = data;
+    const diagnostics = [];
+    context.result({ rule: 'required', path: pathText, message: 'Nested command kind is required.' }, diagnostics);
+    return plain(diagnostics);
+  };
 }
 
 function readFunctionSource(name) {

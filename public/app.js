@@ -3345,8 +3345,11 @@ function validateObjectRule(rule, diagnostics) {
     return;
   }
   const normalizedKind = kind.toLowerCase();
-  const matches = collectPathValues(state.data, rule.path || '');
-  const targets = matches.length ? matches : [{ path: rule.path || '', value: getByPath(state.data, rule.path || '') }];
+  const pathText = rule.path || '';
+  const matches = collectPathValues(state.data, pathText);
+  const targets = matches.length || pathContainsExpansion(pathText)
+    ? matches
+    : [{ path: pathText, value: getByPath(state.data, pathText) }];
   targets.forEach((target) => {
     const value = target.value;
     if (normalizedKind === 'required') {
@@ -3404,6 +3407,12 @@ function validateObjectRule(rule, diagnostics) {
       validateReferenceExists(value, rule, target.path, diagnostics);
     }
   });
+}
+
+function pathContainsExpansion(pathText) {
+  return String(pathText || '')
+    .split('.')
+    .some((segment) => segment === '*' || segment.endsWith('[]'));
 }
 
 function pushDiagnostic(diagnostics, rule, pathText, message) {
