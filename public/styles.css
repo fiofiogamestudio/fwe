@@ -1977,3 +1977,49 @@ tr.is-selected td,
     flex: 1 1 160px;
   }
 }
+
+@media (max-width: 640px) {
+  .collection-workbench {
+    grid-template-rows: minmax(190px, 0.4fr) minmax(0, 0.6fr);
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .collection-browser__header,
+  .collection-editor__header {
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .collection-tabs,
+  .collection-layout-tabs,
+  .collection-mode-tabs,
+  .collection-variant-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+  }
+
+  .collection-tabs button,
+  .collection-layout-tabs button,
+  .collection-mode-tabs button,
+  .collection-variant-tabs button {
+    flex: 0 0 auto;
+  }
+
+  .collection-list,
+  .collection-editor__body {
+    padding: 10px;
+  }
+
+  .collection-editor__headline {
+    min-width: 0;
+  }
+
+  .collection-editor__headline h2 {
+    font-size: 20px;
+  }
+
+  .collection-variant-tabs {
+    padding: 8px 10px;
+  }
+}
