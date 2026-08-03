@@ -650,6 +650,27 @@ async function selectDomain(domain) {
   }
 }
 
+async function openDomainFile(domainId, fileName) {
+  const domain = state.app?.domains?.find((item) => item.id === domainId);
+  if (!domain) {
+    throw new Error(`Unknown domain: ${domainId}`);
+  }
+  if (!confirmDiscardChanges()) {
+    return false;
+  }
+  await selectDomain(domain);
+  const file = state.files.find((item) => item.name === fileName);
+  if (!file) {
+    throw new Error(`File not found in ${domainId}: ${fileName}`);
+  }
+  if (state.file?.name !== file.name) {
+    state.file = file;
+    fileSelect.value = file.name;
+    await openSelectedFile({ skipDirtyCheck: true });
+  }
+  return true;
+}
+
 async function loadFiles() {
   const result = await api(`/api/domains/${encodeURIComponent(state.domain.id)}/files`);
   state.files = result.files || [];
@@ -2018,6 +2039,7 @@ function createViewContext(viewSpec) {
       jsonEditor
     },
     render,
+    openDomainFile,
     renderInspector,
     renderInspectorMode,
     renderDocument,

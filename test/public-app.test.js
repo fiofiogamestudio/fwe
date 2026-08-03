@@ -93,6 +93,17 @@ test('optional-object fields toggle the whole object and render configured child
   assert.match(inspectorSource, /targetPath: joinPath\(context\.targetPath, field\.path\)/);
 });
 
+test('custom forms can open a file in another domain', () => {
+  assert.match(appSource, /async function openDomainFile\(domainId, fileName\)/);
+  assert.match(appSource, /createViewContext[\s\S]*openDomainFile/);
+  assert.match(inspectorSource, /createInspectorFormExtensionContext[\s\S]*openDomainFile/);
+  const source = readFunctionSource('openDomainFile');
+  assert.match(source, /confirmDiscardChanges\(\)/);
+  assert.match(source, /await selectDomain\(domain\)/);
+  assert.match(source, /state\.files\.find\(\(item\) => item\.name === fileName\)/);
+  assert.match(source, /await openSelectedFile\(\{ skipDirtyCheck: true \}\)/);
+});
+
 function loadFunction(name) {
   const context = {};
   vm.runInNewContext(`${readFunctionSource(name)}\nresult = ${name};`, context);

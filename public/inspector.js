@@ -866,6 +866,7 @@ function createInspectorFormExtensionContext(field, target, context, formExtensi
       setStatus(label || formatAppLabel('dirty', '已修改 - {title}', { title: context.title }));
     },
     render,
+    openDomainFile,
     renderInspector,
     setValue: commit,
     onChange: commit,
