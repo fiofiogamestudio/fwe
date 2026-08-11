@@ -97,10 +97,10 @@ test('custom source revision tokens round-trip through read and write results', 
     'module.exports = function register(fwe) {',
     "  fwe.registerSource('revision-source', {",
     "    list() { return [{ name: 'data.json', exists: true }]; },",
-    "    read() { return { name: 'data.json', type: 'json', data: { value: 1 }, revision: 'rev-1' }; },",
+    "    read() { return { name: 'data.json', type: 'json', data: { value: 1 }, revision: 'rev-1', meta: { source: 'base' } }; },",
     '    write(ctx, name, payload) {',
     "      if (payload.revision !== 'rev-1') throw new Error('revision was not forwarded');",
-    "      return { ok: true, name, revision: 'rev-2' };",
+    "      return { ok: true, name, revision: 'rev-2', meta: { source: 'mod' } };",
     '    }',
     '  });',
     '};',
@@ -131,11 +131,75 @@ test('custom source revision tokens round-trip through read and write results', 
   const domain = app.domains[0];
   const opened = await readDomainFile(app, domain, 'data.json');
   assert.equal(opened.revision, 'rev-1');
+  assert.deepEqual(opened.meta, { source: 'base' });
   const saved = await writeDomainFile(app, domain, 'data.json', {
     data: opened.data,
     revision: opened.revision
   });
   assert.equal(saved.revision, 'rev-2');
+  assert.deepEqual(saved.meta, { source: 'mod' });
+});
+
+test('browser session ids reach source providers and extension APIs independently', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fwe-session-context-test-'));
+  const workspace = path.join(root, 'workspace');
+  fs.mkdirSync(workspace, { recursive: true });
+  fs.writeFileSync(path.join(root, 'session-source.js'), [
+    'module.exports = function register(fwe) {',
+    "  fwe.registerSource('session-source', {",
+    "    list(ctx) { return [{ name: `${ctx.sessionId}.json`, exists: true }]; },",
+    "    read(ctx) { return { name: `${ctx.sessionId}.json`, type: 'json', data: { sessionId: ctx.sessionId } }; }",
+    '  });',
+    "  fwe.registerApi('/api/session-probe', ({ sessionId, req, url, sendJson }) => {",
+    "    if (req.method !== 'GET' || url.pathname !== '/api/session-probe') return false;",
+    '    sendJson(200, { sessionId });',
+    '    return true;',
+    '  });',
+    '};',
+    ''
+  ].join('\n'), 'utf8');
+  writeJson(path.join(root, 'domain.fwe.json'), {
+    id: 'session-data',
+    kind: 'document',
+    title: 'Session data',
+    source: { type: 'session-source' },
+    model: { type: 'object' }
+  });
+  writeJson(path.join(root, 'app.fwe.json'), {
+    id: 'session-test-app',
+    title: 'Session Test',
+    workspace: './workspace',
+    extensions: ['./session-source.js'],
+    domains: ['./domain.fwe.json']
+  });
+
+  const app = loadAppConfig(path.join(root, 'app.fwe.json'));
+  const server = await startServer(app, DEFAULT_TEST_HOST, 0, { open: false });
+  const port = server.address().port;
+  t.after(async () => {
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  const request = async (url, sessionId) => {
+    const response = await fetch(`http://${DEFAULT_TEST_HOST}:${port}${url}`, {
+      headers: { 'X-FWE-Session': sessionId }
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  for (const sessionId of ['browser-session-a', 'browser-session-b']) {
+    const files = await request('/api/domains/session-data/files', sessionId);
+    assert.equal(files.status, 200);
+    assert.deepEqual(files.body.files.map((file) => file.name), [`${sessionId}.json`]);
+    const opened = await request(`/api/domains/session-data/files/${sessionId}.json`, sessionId);
+    assert.equal(opened.body.data.sessionId, sessionId);
+    const extension = await request('/api/session-probe', sessionId);
+    assert.equal(extension.body.sessionId, sessionId);
+  }
+
+  const invalid = await request('/api/session-probe', 'bad id');
+  assert.equal(invalid.status, 400);
+  assert.match(invalid.body.error, /Invalid X-FWE-Session/);
 });
 
 test('CLI reuses only the same app launch revision', async (t) => {

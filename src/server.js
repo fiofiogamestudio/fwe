@@ -1261,7 +1261,7 @@ function sourceAction(provider, names) {
   return null;
 }
 
-function sourceContext(app, domain, rawName = '') {
+function sourceContext(app, domain, rawName = '', sessionId = 'default') {
   const source = domain.source || {};
   const sourceBase = source.path
     ? resolveUnderWorkspace(app.workspaceDir, source.path, `domain "${domain.id}" source.path`)
@@ -1276,6 +1276,7 @@ function sourceContext(app, domain, rawName = '') {
     domain,
     source,
     name: rawName,
+    sessionId,
     workspaceDir: app.workspaceDir,
     appDir: app.appDir,
     sourceDir: sourceBase,
@@ -1349,6 +1350,7 @@ function normalizeSourceReadResult(result, rawName) {
       path: source.path || '',
       type,
       ...(source.revision !== undefined ? { revision: String(source.revision) } : {}),
+      ...(source.meta !== undefined ? { meta: source.meta } : {}),
       ...(data !== undefined ? { data } : {}),
       content
     };
@@ -1365,60 +1367,61 @@ function normalizeSourceReadResult(result, rawName) {
   };
 }
 
-async function listSourceProviderFiles(app, domain, provider) {
+async function listSourceProviderFiles(app, domain, provider, sessionId = 'default') {
   const list = sourceAction(provider, ['list', 'listFiles', 'files']);
   if (list) {
-    const result = await list(sourceContext(app, domain));
+    const result = await list(sourceContext(app, domain, '', sessionId));
     return (Array.isArray(result) ? result : []).map((entry, index) => normalizeSourceFileEntry(entry, index));
   }
   return [];
 }
 
-async function readSourceProviderFile(app, domain, provider, rawName) {
+async function readSourceProviderFile(app, domain, provider, rawName, sessionId = 'default') {
   const read = sourceAction(provider, ['read', 'readFile', 'open']);
   if (!read) {
     throw Object.assign(new Error(`Source provider "${sourceProviderName(app, domain)}" does not implement read().`), { status: 501 });
   }
-  const result = await read(sourceContext(app, domain, rawName), rawName);
+  const result = await read(sourceContext(app, domain, rawName, sessionId), rawName);
   return normalizeSourceReadResult(result, rawName);
 }
 
-async function writeSourceProviderFile(app, domain, provider, rawName, payload) {
+async function writeSourceProviderFile(app, domain, provider, rawName, payload, sessionId = 'default') {
   const write = sourceAction(provider, ['write', 'save', 'saveFile']);
   if (!write) {
     throw Object.assign(new Error(`Source provider "${sourceProviderName(app, domain)}" does not implement write().`), { status: 501 });
   }
-  const result = await write(sourceContext(app, domain, rawName), rawName, payload);
+  const result = await write(sourceContext(app, domain, rawName, sessionId), rawName, payload);
   return {
     ok: true,
     name: result?.name || rawName,
     path: result?.path || '',
-    ...(result?.revision !== undefined ? { revision: String(result.revision) } : {})
+    ...(result?.revision !== undefined ? { revision: String(result.revision) } : {}),
+    ...(result?.meta !== undefined ? { meta: result.meta } : {})
   };
 }
 
-async function createSourceProviderFile(app, domain, provider, payload) {
+async function createSourceProviderFile(app, domain, provider, payload, sessionId = 'default') {
   const create = sourceAction(provider, ['create', 'newFile']);
   if (!create) {
     throw Object.assign(new Error(`Source provider "${sourceProviderName(app, domain)}" does not implement create().`), { status: 501 });
   }
-  const result = await create(sourceContext(app, domain, payload?.name || ''), payload || {});
+  const result = await create(sourceContext(app, domain, payload?.name || '', sessionId), payload || {});
   return result || { ok: true };
 }
 
-async function deleteSourceProviderFile(app, domain, provider, rawName) {
+async function deleteSourceProviderFile(app, domain, provider, rawName, sessionId = 'default') {
   const remove = sourceAction(provider, ['delete', 'remove', 'deleteFile']);
   if (!remove) {
     throw Object.assign(new Error(`Source provider "${sourceProviderName(app, domain)}" does not implement delete().`), { status: 501 });
   }
-  const result = await remove(sourceContext(app, domain, rawName), rawName);
+  const result = await remove(sourceContext(app, domain, rawName, sessionId), rawName);
   return result || { ok: true, name: rawName };
 }
 
-function listFiles(app, domain) {
+function listFiles(app, domain, sessionId = 'default') {
   const provider = sourceProvider(app, domain);
   if (provider) {
-    return listSourceProviderFiles(app, domain, provider);
+    return listSourceProviderFiles(app, domain, provider, sessionId);
   }
 
   const source = domain.source || {};
@@ -1514,10 +1517,10 @@ function filePathForName(app, domain, rawName) {
   return fullPath;
 }
 
-function readDomainFile(app, domain, rawName) {
+function readDomainFile(app, domain, rawName, sessionId = 'default') {
   const provider = sourceProvider(app, domain);
   if (provider) {
-    return readSourceProviderFile(app, domain, provider, rawName);
+    return readSourceProviderFile(app, domain, provider, rawName, sessionId);
   }
 
   if (domain.source?.type === 'multi-json') {
@@ -1548,10 +1551,10 @@ function readDomainFile(app, domain, rawName) {
   return { name, path: toPosix(path.relative(app.workspaceDir, fullPath)), type: 'text', content: text };
 }
 
-function writeDomainFile(app, domain, rawName, payload) {
+function writeDomainFile(app, domain, rawName, payload, sessionId = 'default') {
   const provider = sourceProvider(app, domain);
   if (provider) {
-    return writeSourceProviderFile(app, domain, provider, rawName, payload);
+    return writeSourceProviderFile(app, domain, provider, rawName, payload, sessionId);
   }
 
   if (domain.source?.type === 'multi-json') {
@@ -1583,10 +1586,10 @@ function writeDomainFile(app, domain, rawName, payload) {
   };
 }
 
-async function createDomainFile(app, domain, payload) {
+async function createDomainFile(app, domain, payload, sessionId = 'default') {
   const provider = sourceProvider(app, domain);
   if (provider) {
-    return createSourceProviderFile(app, domain, provider, payload);
+    return createSourceProviderFile(app, domain, provider, payload, sessionId);
   }
 
   const name = safeRelativeName(payload?.name || domain.defaults?.fileName || (domain.kind === 'text' ? 'new.txt' : 'new.json'));
@@ -1596,13 +1599,13 @@ async function createDomainFile(app, domain, payload) {
   const dataPayload = domain.kind === 'text'
     ? { content: payload?.content ?? domain.defaults?.text ?? '' }
     : { data: payload?.data ?? clone(domain.defaults?.data || {}) };
-  return writeDomainFile(app, domain, name, dataPayload);
+  return writeDomainFile(app, domain, name, dataPayload, sessionId);
 }
 
-function deleteDomainFile(app, domain, rawName) {
+function deleteDomainFile(app, domain, rawName, sessionId = 'default') {
   const provider = sourceProvider(app, domain);
   if (provider) {
-    return deleteSourceProviderFile(app, domain, provider, rawName);
+    return deleteSourceProviderFile(app, domain, provider, rawName, sessionId);
   }
 
   if (domain.source?.type === 'multi-json') {
@@ -1702,9 +1705,9 @@ function sendJson(res, status, data) {
   res.end(JSON.stringify(data, null, 2));
 }
 
-function sendText(res, status, text) {
+function sendText(res, status, text, contentType = 'text/plain; charset=utf-8') {
   res.writeHead(status, {
-    'Content-Type': 'text/plain; charset=utf-8',
+    'Content-Type': contentType,
     'Cache-Control': 'no-store'
   });
   res.end(text);
@@ -1737,7 +1740,19 @@ function parseRequestJson(body) {
   return JSON.parse(stripBom(body || '{}'));
 }
 
+function requestSessionId(req) {
+  const rawHeader = req?.headers?.['x-fwe-session'];
+  const raw = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
+  const value = String(raw || '').trim();
+  if (!value) return 'default';
+  if (!/^[A-Za-z0-9._:-]{8,128}$/.test(value)) {
+    throw Object.assign(new Error('Invalid X-FWE-Session header.'), { status: 400 });
+  }
+  return value;
+}
+
 async function handleApi(app, req, res, url) {
+  const sessionId = requestSessionId(req);
   if (req.method === 'GET' && url.pathname === '/api/app') {
     sendJson(res, 200, publicApp(app));
     return;
@@ -1765,13 +1780,13 @@ async function handleApi(app, req, res, url) {
   if (filesMatch) {
     const domain = findDomain(app, decodeURIComponent(filesMatch[1]));
     if (req.method === 'GET') {
-      sendJson(res, 200, { files: await listFiles(app, domain) });
+      sendJson(res, 200, { files: await listFiles(app, domain, sessionId) });
       return;
     }
     if (req.method === 'POST') {
       const body = await readBody(req);
       const payload = parseRequestJson(body);
-      sendJson(res, 200, await createDomainFile(app, domain, payload));
+      sendJson(res, 200, await createDomainFile(app, domain, payload, sessionId));
       return;
     }
   }
@@ -1781,19 +1796,19 @@ async function handleApi(app, req, res, url) {
     const domain = findDomain(app, decodeURIComponent(fileMatch[1]));
     const name = decodeURIComponent(fileMatch[2]);
     if (req.method === 'GET') {
-      sendJson(res, 200, await readDomainFile(app, domain, name));
+      sendJson(res, 200, await readDomainFile(app, domain, name, sessionId));
       return;
     }
 
     if (req.method === 'PUT') {
       const body = await readBody(req);
       const payload = parseRequestJson(body);
-      sendJson(res, 200, await writeDomainFile(app, domain, name, payload));
+      sendJson(res, 200, await writeDomainFile(app, domain, name, payload, sessionId));
       return;
     }
 
     if (req.method === 'DELETE') {
-      sendJson(res, 200, await deleteDomainFile(app, domain, name));
+      sendJson(res, 200, await deleteDomainFile(app, domain, name, sessionId));
       return;
     }
   }
@@ -1803,6 +1818,7 @@ async function handleApi(app, req, res, url) {
     req,
     res,
     url,
+    sessionId,
     sendJson: (status, data) => sendJson(res, status, data),
     sendText: (status, text, contentType) => sendText(res, status, text, contentType),
     readBody: () => readBody(req),

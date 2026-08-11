@@ -41,6 +41,7 @@ const state = {
   serverDiagnostics: [],
   dirty: false
 };
+let lastSelectionSignature = '';
 
 const DEFAULT_LABELS = {
   open: '打开',
@@ -165,6 +166,8 @@ const BUILT_IN_VIEW_MODULES = [
   './views/text.js'
 ];
 
+const fweSession = createBrowserSession();
+
 const fweRuntime = window.createFweRuntime({
   context: () => createViewContext(resolveDomainView(state.domain).spec)
 });
@@ -176,6 +179,13 @@ const {
 const { normalizeWorkbenchLayoutId } = fweRuntime;
 window.fwe = fweRuntime;
 window.fweRuntime = fweRuntime;
+fweRuntime.session = fweSession;
+fweRuntime.resources = {
+  current: () => currentResourceSnapshot(),
+  saveCurrent: () => saveFile({ force: true }),
+  reloadCurrent: () => openSelectedFile({ skipDirtyCheck: true }),
+  refresh: () => refreshCurrentResource()
+};
 
 const appTitle = document.querySelector('#appTitle');
 const statusText = document.querySelector('#statusText');
@@ -665,6 +675,7 @@ async function loadFiles() {
     fileSelect.value = state.file.name;
   }
   setStatus(`${state.domain.title}: ${state.files.length} ${getAppLabel('files')}`);
+  dispatchResourceEvent('fwe:resources-listed', { files: state.files.map((file) => ({ ...file })) });
 }
 
 async function openSelectedFile(options = {}) {
@@ -680,7 +691,8 @@ async function openSelectedFile(options = {}) {
   state.file = {
     name: result.name,
     path: result.path,
-    ...(result.revision !== undefined ? { revision: String(result.revision) } : {})
+    ...(result.revision !== undefined ? { revision: String(result.revision) } : {}),
+    ...(result.meta !== undefined ? { meta: clone(result.meta) } : {})
   };
   if (result.type === 'text') {
     state.text = result.content || '';
@@ -699,6 +711,7 @@ async function openSelectedFile(options = {}) {
   resetHistory();
   setStatus(`${getAppLabel('opened')} ${state.file.name}`);
   render();
+  dispatchResourceEvent('fwe:resource-opened');
 }
 
 async function createFile() {
@@ -797,11 +810,77 @@ async function saveFile(options = {}) {
   const listedFile = state.files.find((file) => file.name === savingFile.name);
   state.file = {
     ...(listedFile || savingFile),
-    ...(saved?.revision !== undefined ? { revision: String(saved.revision) } : {})
+    ...(saved?.revision !== undefined ? { revision: String(saved.revision) } : {}),
+    ...(saved?.meta !== undefined
+      ? { meta: clone(saved.meta) }
+      : (savingFile.meta !== undefined ? { meta: clone(savingFile.meta) } : {}))
   };
   fileSelect.value = state.file.name;
   render();
+  dispatchResourceEvent('fwe:resource-saved', { saved: saved ? clone(saved) : null });
   return true;
+}
+
+async function refreshCurrentResource() {
+  const currentName = state.file?.name || '';
+  await loadFiles();
+  const next = state.files.find((file) => file.name === currentName) || state.files[0] || null;
+  state.file = next;
+  if (!next) {
+    state.data = null;
+    state.text = '';
+    render();
+    dispatchResourceEvent('fwe:resource-cleared');
+    return false;
+  }
+  fileSelect.value = next.name;
+  await openSelectedFile({ skipDirtyCheck: true });
+  return true;
+}
+
+function currentResourceSnapshot(extra = {}) {
+  return {
+    domain: state.domain ? { id: state.domain.id, title: state.domain.title } : null,
+    file: state.file ? clone(state.file) : null,
+    data: state.data === undefined || state.data === null ? state.data : clone(state.data),
+    text: state.text,
+    selection: currentSelectionSnapshot(),
+    dirty: Boolean(state.dirty || state.jsonDirty),
+    ...extra
+  };
+}
+
+function currentSelectionSnapshot() {
+  const selection = {
+    domainId: state.domain?.id || '',
+    fileName: state.file?.name || '',
+    key: state.selectedKey || ''
+  };
+  if (!state.domain || !selection.key) return selection;
+  const collection = getActiveWorkbenchCollection();
+  if (!collection || !selection.key.startsWith(`${collection.path}[`)) return selection;
+  const selected = findSelectedCollectionItem(collection);
+  if (!selected || selected.path !== selection.key) return selection;
+  return {
+    ...selection,
+    collectionId: collection.id,
+    collectionPath: collection.path,
+    itemId: String(getCollectionItemId(collection, selected.item, selected.index))
+  };
+}
+
+function dispatchSelectionIfChanged() {
+  const selection = currentSelectionSnapshot();
+  const signature = JSON.stringify(selection);
+  if (signature === lastSelectionSignature) return;
+  lastSelectionSignature = signature;
+  dispatchResourceEvent('fwe:selection-changed', { selection });
+}
+
+function dispatchResourceEvent(name, extra = {}) {
+  window.dispatchEvent(new CustomEvent(name, {
+    detail: currentResourceSnapshot(extra)
+  }));
 }
 
 function commitFocusedInspectorControl(sourceElement = null) {
@@ -2065,11 +2144,13 @@ function render() {
     inspectorForm.innerHTML = `<div class="inspector-empty">${escapeHtml(getAppLabel('openOrCreateFile', '打开或新建一个文件。'))}</div>`;
     jsonEditor.value = '';
     updateActionButtons();
+    dispatchSelectionIfChanged();
     return;
   }
 
   resolved.view.render(ctx, resolved.spec);
   updateActionButtons();
+  dispatchSelectionIfChanged();
 }
 
 function hideAllViews() {
@@ -3604,12 +3685,13 @@ function escapeHtml(value) {
 }
 
 async function api(path, options = {}) {
+  const { headers: optionHeaders, ...requestOptions } = options;
   const response = await fetch(path, {
+    ...requestOptions,
     headers: {
       'Content-Type': 'application/json',
-      ...(options.headers || {})
-    },
-    ...options
+      ...fweSession.headers(optionHeaders)
+    }
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -3619,6 +3701,33 @@ async function api(path, options = {}) {
     throw error;
   }
   return data;
+}
+
+function createBrowserSession() {
+  const storageKey = 'fwe.browser-session.v1';
+  let id = '';
+  try {
+    id = String(window.sessionStorage.getItem(storageKey) || '').trim();
+  } catch {
+    id = '';
+  }
+  if (!/^[A-Za-z0-9._:-]{8,128}$/.test(id)) {
+    const random = window.crypto?.randomUUID?.()
+      || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    id = `browser-${random}`.replace(/[^A-Za-z0-9._:-]/g, '').slice(0, 128);
+    try {
+      window.sessionStorage.setItem(storageKey, id);
+    } catch {
+      // Storage can be unavailable in hardened browser contexts; the page-local ID still works.
+    }
+  }
+  return Object.freeze({
+    id,
+    header: 'X-FWE-Session',
+    headers(input = {}) {
+      return { ...(input || {}), 'X-FWE-Session': id };
+    }
+  });
 }
 
 function setStatus(message, isError = false) {

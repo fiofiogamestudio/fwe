@@ -58,6 +58,29 @@ test('open and save retain source revision tokens for optimistic concurrency', (
   assert.match(saveSource, /saved\?\.revision !== undefined/);
 });
 
+test('resource extensions receive lifecycle metadata and can invoke host resource commands', () => {
+  const openSource = readFunctionSource('openSelectedFile');
+  const saveSource = readFunctionSource('saveFile');
+  assert.match(appSource, /fweRuntime\.resources = \{/);
+  assert.match(appSource, /saveCurrent: \(\) => saveFile\(\{ force: true \}\)/);
+  assert.match(openSource, /result\.meta !== undefined/);
+  assert.match(openSource, /dispatchResourceEvent\('fwe:resource-opened'\)/);
+  assert.match(saveSource, /saved\?\.meta !== undefined/);
+  assert.match(saveSource, /dispatchResourceEvent\('fwe:resource-saved'/);
+});
+
+test('browser resources expose structured selection and send a stable session header', () => {
+  const snapshotSource = readFunctionSource('currentResourceSnapshot');
+  const sessionSource = readFunctionSource('createBrowserSession');
+  const apiSource = readFunctionSource('api');
+  assert.match(snapshotSource, /selection: currentSelectionSnapshot\(\)/);
+  assert.match(appSource, /dispatchResourceEvent\('fwe:selection-changed'/);
+  assert.match(appSource, /fweRuntime\.session = fweSession/);
+  assert.match(sessionSource, /window\.sessionStorage\.getItem/);
+  assert.match(sessionSource, /'X-FWE-Session': id/);
+  assert.match(apiSource, /fweSession\.headers\(optionHeaders\)/);
+});
+
 test('optional-object fields toggle the whole object and render configured child fields', () => {
   assert.match(inspectorSource, /field\.type === 'optional-object'/);
   assert.match(inspectorSource, /function renderInspectorOptionalObjectField\(field, target, context\)/);
