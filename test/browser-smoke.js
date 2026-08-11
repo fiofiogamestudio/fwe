@@ -116,6 +116,40 @@ async function main() {
       if (result.kind === 'item' && result.codeMirror !== 1) {
         failures.push(`ContentEditor item: expected one CodeMirror instance, got ${result.codeMirror}.`);
       }
+      if (result.kind === 'dice') {
+        if (result.faceLayout?.faces !== 6) failures.push(`ContentEditor dice: expected six face cards, got ${result.faceLayout?.faces || 0}.`);
+        if (result.faceLayout?.quickEditors !== 6) failures.push(`ContentEditor dice: expected six quick editors, got ${result.faceLayout?.quickEditors || 0}.`);
+        if (Number(result.faceLayout?.maxCardHeight || 0) > 220) {
+          failures.push(`ContentEditor dice: face card is too tall (${result.faceLayout.maxCardHeight}px).`);
+        }
+        if (result.narrowFaceOverflow?.length) {
+          failures.push(`ContentEditor dice: ${result.narrowFaceOverflow.length} narrow-layout overflow(s).`);
+        }
+        if (Number(result.diceFilterLayout?.packOptions || 0) < 2) {
+          failures.push('ContentEditor dice: character multi-select has fewer than two options.');
+        }
+        if (Number(result.diceFilterLayout?.poolOptions || 0) < 1) {
+          failures.push('ContentEditor dice: dice-pool multi-select has no options.');
+        }
+        if (Number(result.diceFilterLayout?.legacyPoolGroups || 0) !== 0) {
+          failures.push('ContentEditor dice: legacy grouped pool list is still visible.');
+        }
+        if (Number(result.diceFilterInteraction?.multiList || 0) <= Number(result.diceFilterInteraction?.initialList || 0)) {
+          failures.push('ContentEditor dice: selecting another character did not expand the flat list.');
+        }
+        if (Number(result.diceFilterInteraction?.emptyPoolList ?? -1) !== 0) {
+          failures.push('ContentEditor dice: clearing pool selections did not empty the list.');
+        }
+        if (result.diceFilterInteraction?.gridCards !== result.diceFilterInteraction?.restoredPoolList) {
+          failures.push('ContentEditor dice: grid and flat list do not share the same filters.');
+        }
+        if (result.diceFilterInteraction?.finalList !== result.diceFilterInteraction?.initialList) {
+          failures.push('ContentEditor dice: filter smoke test did not restore the initial character selection.');
+        }
+        if (result.diceFilterInteraction?.crossPackOpened !== true) {
+          failures.push('ContentEditor dice: opening a die from another selected character did not switch content stacks.');
+        }
+      }
     });
 
     console.log(JSON.stringify({ app: app.id, url: baseUrl, outputDir, results, contentKinds, graphMutation, errors }, null, 2));
@@ -369,11 +403,172 @@ async function inspectContentEditor(cdp, outputDir) {
         title: root.querySelector('#editorTitle')?.textContent || '',
         status: root.querySelector('#statusText')?.textContent || '',
         codeMirror,
+        faceLayout: ${JSON.stringify(kind)} === 'dice' ? (() => {
+          const cards = [...root.querySelectorAll('.dice-face-card')];
+          return {
+            faces: cards.length,
+            quickEditors: root.querySelectorAll('.dice-face-quick-fields').length,
+            advancedEditors: root.querySelectorAll('.dice-face-advanced').length,
+            listHeight: Math.round(root.querySelector('.dice-face-list')?.getBoundingClientRect().height || 0),
+            maxCardHeight: Math.round(Math.max(0, ...cards.map((card) => card.getBoundingClientRect().height)))
+          };
+        })() : null,
+        diceFilterLayout: ${JSON.stringify(kind)} === 'dice' ? (() => {
+          const packFilter = root.querySelector('#dicePackFilter');
+          const poolFilter = root.querySelector('#dicePoolFilter');
+          return {
+            packOptions: packFilter?.items?.length || 0,
+            selectedPacks: packFilter?.value?.length || 0,
+            poolOptions: poolFilter?.items?.length || 0,
+            selectedPools: poolFilter?.value?.length || 0,
+            legacyPoolGroups: root.querySelectorAll('.dice-pool-group').length
+          };
+        })() : null,
         overflow
       };
     })()`);
     const screenshot = await cdp.call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     fs.writeFileSync(path.join(outputDir, `content-${safeName(kind)}.png`), Buffer.from(screenshot.data, 'base64'));
+    if (kind === 'dice') {
+      await evaluate(cdp, `(() => {
+        const root = document.querySelector('.content-editor-host')?.shadowRoot;
+        if (root?.querySelector('#dicePackFilter')) root.querySelector('#dicePackFilter').open = true;
+      })()`);
+      await delay(100);
+      const filterScreenshot = await cdp.call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+      fs.writeFileSync(path.join(outputDir, 'content-dice-filters.png'), Buffer.from(filterScreenshot.data, 'base64'));
+      await evaluate(cdp, `(() => {
+        const root = document.querySelector('.content-editor-host')?.shadowRoot;
+        if (root?.querySelector('#dicePackFilter')) root.querySelector('#dicePackFilter').open = false;
+        if (root?.querySelector('#dicePoolFilter')) root.querySelector('#dicePoolFilter').open = true;
+      })()`);
+      await delay(100);
+      const poolFilterScreenshot = await cdp.call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+      fs.writeFileSync(path.join(outputDir, 'content-dice-pool-filters.png'), Buffer.from(poolFilterScreenshot.data, 'base64'));
+      result.diceFilterInteraction = await evaluate(cdp, `(async () => {
+        const root = document.querySelector('.content-editor-host')?.shadowRoot;
+        const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        const initialList = root?.querySelectorAll('.browser-item').length || 0;
+        const packFilter = root?.querySelector('#dicePackFilter');
+        const poolFilter = root?.querySelector('#dicePoolFilter');
+        if (packFilter) packFilter.open = false;
+        if (poolFilter) poolFilter.open = false;
+        const selectedPacks = new Set(packFilter?.value || []);
+        const added = (packFilter?.items || []).find((item) => !selectedPacks.has(item.value));
+        if (!added) return { initialList, multiList: initialList, emptyPoolList: -1, restoredPoolList: initialList, gridCards: -1, finalList: initialList };
+        const addedPackId = added.value;
+        const addedInput = [...(packFilter.shadowRoot?.querySelectorAll('input[type="checkbox"]') || [])]
+          .find((input) => input.value === addedPackId);
+        if (!addedInput) return { initialList, multiList: initialList, emptyPoolList: -1, restoredPoolList: initialList, gridCards: -1, finalList: initialList };
+        addedInput.click();
+        await wait(120);
+        const multiList = root.querySelectorAll('.browser-item').length;
+        (poolFilter.shadowRoot?.querySelectorAll('.actions button') || [])[1]?.click();
+        await wait(120);
+        const emptyPoolList = root.querySelectorAll('.browser-item').length;
+        (poolFilter.shadowRoot?.querySelectorAll('.actions button') || [])[0]?.click();
+        await wait(120);
+        const restoredPoolList = root.querySelectorAll('.browser-item').length;
+        root.querySelector('#gridViewButton')?.click();
+        await wait(160);
+        const gridCards = root.querySelectorAll('.card-grid-card').length;
+        return { initialList, addedPackId, multiList, emptyPoolList, restoredPoolList, gridCards };
+      })()`);
+      const gridScreenshot = await cdp.call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+      fs.writeFileSync(path.join(outputDir, 'content-dice-grid-multi.png'), Buffer.from(gridScreenshot.data, 'base64'));
+      const addedPackId = result.diceFilterInteraction.addedPackId || '';
+      result.diceFilterInteraction.finalList = await evaluate(cdp, `(async () => {
+        const root = document.querySelector('.content-editor-host')?.shadowRoot;
+        const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        const packFilter = root?.querySelector('#dicePackFilter');
+        if (packFilter?.value?.includes(${JSON.stringify(addedPackId)})) {
+          packFilter.setValue(
+            packFilter.value.filter((value) => value !== ${JSON.stringify(addedPackId)}),
+            { emit: true, source: 'browser-smoke' }
+          );
+        }
+        await wait(140);
+        root?.querySelector('#detailViewButton')?.click();
+        await wait(140);
+        return root?.querySelectorAll('.browser-item').length || 0;
+      })()`);
+      result.diceFilterInteraction.crossPackOpened = await evaluate(cdp, `(async () => {
+        const root = document.querySelector('.content-editor-host')?.shadowRoot;
+        const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        const initialActivePack = root?.querySelector('#packSelect')?.value || '';
+        const targetPackId = ${JSON.stringify(addedPackId)};
+        const packFilter = root?.querySelector('#dicePackFilter');
+        if (packFilter && !packFilter.value.includes(targetPackId)) {
+          packFilter.setValue([...packFilter.value, targetPackId], { emit: true, source: 'browser-smoke' });
+        }
+        await wait(160);
+        const target = [...(root?.querySelectorAll('.browser-item') || [])]
+          .find((item) => item.dataset.packId === targetPackId);
+        const targetId = target?.dataset.itemId || '';
+        target?.click();
+        const deadline = Date.now() + 5000;
+        while (Date.now() < deadline) {
+          const activePack = root?.querySelector('#packSelect')?.value || '';
+          const subtitle = root?.querySelector('#editorSubtitle')?.textContent || '';
+          if (activePack === targetPackId && targetId && subtitle.includes(targetId)) break;
+          await wait(80);
+        }
+        const opened = (root?.querySelector('#packSelect')?.value || '') === targetPackId
+          && Boolean(targetId)
+          && (root?.querySelector('#editorSubtitle')?.textContent || '').includes(targetId);
+        const packSelect = root?.querySelector('#packSelect');
+        if (packSelect && initialActivePack && packSelect.value !== initialActivePack) {
+          packSelect.value = initialActivePack;
+          packSelect.dispatchEvent(new Event('change', { bubbles: true }));
+          const restoreDeadline = Date.now() + 5000;
+          while (Date.now() < restoreDeadline
+            && (root?.querySelector('#editorSubtitle')?.textContent || '').includes(targetId)) await wait(80);
+          await wait(120);
+        }
+        if (packFilter?.value?.includes(targetPackId)) {
+          packFilter.setValue(
+            packFilter.value.filter((value) => value !== targetPackId),
+            { emit: true, source: 'browser-smoke' }
+          );
+        }
+        await wait(160);
+        return opened;
+      })()`);
+      await evaluate(cdp, `(() => {
+        const root = document.querySelector('.content-editor-host')?.shadowRoot;
+        root?.querySelector('.clean-panel--dice-faces')?.scrollIntoView({ block: 'start' });
+      })()`);
+      await delay(100);
+      const faceScreenshot = await cdp.call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+      fs.writeFileSync(path.join(outputDir, 'content-dice-faces.png'), Buffer.from(faceScreenshot.data, 'base64'));
+
+      await cdp.call('Emulation.setDeviceMetricsOverride', {
+        width: 1000,
+        height: 1000,
+        deviceScaleFactor: 1,
+        mobile: false
+      });
+      await delay(100);
+      await evaluate(cdp, `(() => {
+        const root = document.querySelector('.content-editor-host')?.shadowRoot;
+        root?.querySelector('.clean-panel--dice-faces')?.scrollIntoView({ block: 'start' });
+      })()`);
+      result.narrowFaceOverflow = await evaluate(cdp, `(() => {
+        const root = document.querySelector('.content-editor-host')?.shadowRoot;
+        if (!root) return ['missing root'];
+        return [...root.querySelectorAll('.dice-face-card, .dice-face-quick-fields')]
+          .filter((element) => element.getClientRects().length > 0)
+          .filter((element) => element.scrollWidth > element.clientWidth + 2)
+          .map((element) => ({
+            className: element.className,
+            clientWidth: element.clientWidth,
+            scrollWidth: element.scrollWidth
+          }));
+      })()`);
+      const narrowScreenshot = await cdp.call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+      fs.writeFileSync(path.join(outputDir, 'content-dice-faces-narrow.png'), Buffer.from(narrowScreenshot.data, 'base64'));
+      await cdp.call('Emulation.clearDeviceMetricsOverride');
+    }
     results.push(result);
   }
   return results;
