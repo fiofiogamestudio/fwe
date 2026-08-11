@@ -2,8 +2,13 @@
 
 ## Unreleased
 
+- Added a reusable browser multi-select control with grouped/count options, bulk actions, popup lifecycle handling, and a stable `fwe.ui` API.
 - Added one canonical `start.bat` that opens the bundled example app.
 - Reused an already-running copy of the same app and rejected unrelated services on the configured port.
+- Added launch fingerprints so changed app, domain, extension, or FWE runtime files cannot silently reuse an outdated server.
+- Preserved opaque source metadata through list/open/save and exposed generic browser resource lifecycle events and commands.
+- Added browser-session request context and structured workbench selection events for host extensions with per-session state.
+- Allowed trusted API extensions to return an explicit text MIME type so dynamically served scripts and styles load correctly.
 
 ## 0.2.0
 

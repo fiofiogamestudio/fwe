@@ -12,7 +12,7 @@ npm test
 node bin/fwe.js --explain flow --app examples/app.fwe.json
 ```
 
-`start.bat` is the canonical Windows launcher. It serves the bundled example app and opens the browser automatically. `npm start` provides the same behavior. Pass `--no-open` or set `FWE_NO_BROWSER=1` when you only want the server. If the same app is already running, fwe reuses it; if the port belongs to another app or service, fwe stops with an explicit error instead of opening the wrong page.
+`start.bat` is the canonical Windows launcher. It serves the bundled example app and opens the browser automatically. `npm start` provides the same behavior. Pass `--no-open` or set `FWE_NO_BROWSER=1` when you only want the server. If the same app revision is already running, fwe reuses it. If app, domain, extension, or runtime files changed, fwe rejects the outdated server with an explicit restart message instead of mixing old server state with new browser files. A port owned by another app or service is rejected as well.
 
 ## Project Layout
 
@@ -21,7 +21,7 @@ node bin/fwe.js --explain flow --app examples/app.fwe.json
 | `start.bat` | canonical Windows launcher for the bundled example app |
 | `bin/fwe.js` | CLI entry point |
 | `src/` | server, source loading, DSL compilation, and extension loading |
-| `public/runtime.js` | browser registry API for views, forms, slots, and workbench layouts |
+| `public/runtime.js` | browser registry API for views, forms, slots, workbench layouts, and reusable controls |
 | `public/app.js` | app shell, file operations, history, workbench, validation, and shared helpers |
 | `public/graph.js` | fixed graph, free graph, route-lane layout, and blueprint rendering |
 | `public/inspector.js` | inspector form rendering and JSON mode |
@@ -332,7 +332,44 @@ module.exports = (fwe) => {
 };
 ```
 
-Return `true` or omit the return value after handling a request. Return `false` to try the next matching parent prefix and then fwe's normal 404 response. More specific prefixes run first; duplicate prefixes and fwe's reserved `/api/app`, `/api/domains`, and `/api/extensions` routes are rejected. API extensions run in the server process and are trusted code; keep game-specific paths and persistence rules in the host repository.
+### Reusable Browser Controls
+
+Custom views should use FWE controls for interaction patterns that are not domain-specific. The multi-select control owns its popup, grouping, counts, select-all/clear actions, outside-click and Escape handling, and change events. The host supplies only labels, items, selected values, and domain behavior:
+
+```js
+const filter = window.fwe.ui.createMultiSelect({
+  id: 'kindFilter',
+  placeholder: '类型',
+  selectAllLabel: '全选',
+  clearLabel: '清空',
+  items: [
+    { value: 'buff', label: 'Buff', group: '战斗', count: 12 },
+    { value: 'item', label: '道具', group: '奖励', count: 8 }
+  ],
+  selected: ['buff']
+});
+filter.addEventListener('change', (event) => applyKinds(event.detail.values));
+host.append(filter);
+```
+
+Use `configure(...)` for non-emitting model updates, `value` or `setValue(...)` for selection, `selectAll()` / `clear()` for commands, and `open` / `close()` for popup state. Set `--fwe-multi-select-width`, `--fwe-multi-select-menu-width`, and `--fwe-multi-select-menu-max-height` on the returned element when a host layout needs different dimensions. Keep option discovery and filtering semantics in the host extension.
+
+Source entries and `read` / `write` / `create` results may include an opaque `meta` object. FWE preserves it without interpreting host semantics. Browser extensions can observe resource state through:
+
+```js
+window.fwe.resources.current();
+await window.fwe.resources.saveCurrent();
+await window.fwe.resources.reloadCurrent();
+await window.fwe.resources.refresh();
+window.fwe.session.id;
+window.fwe.session.headers({ 'Content-Type': 'application/json' });
+```
+
+The shell dispatches `fwe:resources-listed`, `fwe:resource-opened`, `fwe:resource-saved`, `fwe:resource-cleared`, and `fwe:selection-changed` events. Resource snapshots include file metadata, dirty state, and a structured selection with `domainId`, `fileName`, and `key` plus workbench `collectionId`, `collectionPath`, and `itemId` when available. Host extensions should use this lifecycle for provenance, source-control, or adjacent resource UX while leaving their domain rules outside FWE core.
+
+Core API requests automatically send the page's `X-FWE-Session` value. Source-provider contexts and server API-extension handlers receive it as `sessionId`; custom browser fetches must merge `window.fwe.session.headers(...)` into their request headers. The ID survives reloads in one browser session but does not make mutable host state process-global. Headerless tools retain the `default` compatibility session.
+
+Return `true` or omit the return value after handling a request. Return `false` to try the next matching parent prefix and then fwe's normal 404 response. More specific prefixes run first; duplicate prefixes and fwe's reserved `/api/app`, `/api/domains`, and `/api/extensions` routes are rejected. `sendText(status, text, contentType)` accepts an explicit MIME type for scripts and styles. API extensions run in the server process and are trusted code; keep game-specific paths and persistence rules in the host repository.
 
 ## Tests
 
