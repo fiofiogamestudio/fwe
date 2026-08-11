@@ -13,6 +13,8 @@ const {
   main,
   parseArgs,
   readDomainFile,
+  requestPublicApp,
+  reuseRunningApp,
   startServer,
   writeDomainFile
 } = require('../src/server');
@@ -39,6 +41,18 @@ test('FWE_NO_BROWSER keeps batch launches headless even when they request --open
   assert.equal(parseArgs(['--open'], { FWE_NO_BROWSER: '1' }).open, false);
   assert.equal(parseArgs([], { FWE_OPEN_BROWSER: '1' }).open, true);
   assert.equal(parseArgs(['--no-open'], { FWE_OPEN_BROWSER: '1' }).open, false);
+});
+
+test('an older same-id server without a launch revision is rejected', () => {
+  assert.throws(
+    () => reuseRunningApp(
+      { id: 'test-app', title: 'Test App', labels: {}, launchRevision: 'current' },
+      { id: 'test-app', title: 'Test App', labels: {} },
+      'http://127.0.0.1:3219',
+      3219
+    ),
+    /outdated server/
+  );
 });
 
 test('built-in folder-json source lists, reads, and writes inside its workspace', (t) => {
@@ -124,7 +138,7 @@ test('custom source revision tokens round-trip through read and write results', 
   assert.equal(saved.revision, 'rev-2');
 });
 
-test('CLI reuses the running app and rejects a different app on the same port', async (t) => {
+test('CLI reuses only the same app launch revision', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fwe-start-test-'));
   const workspace = path.join(root, 'workspace');
   fs.mkdirSync(workspace, { recursive: true });
@@ -137,10 +151,13 @@ test('CLI reuses the running app and rejects a different app on the same port', 
   });
   const appPath = path.join(root, 'app.fwe.json');
   const otherAppPath = path.join(root, 'other.fwe.json');
+  const extensionPath = path.join(root, 'extension.js');
+  fs.writeFileSync(extensionPath, 'module.exports = function setup() {};\n', 'utf8');
   writeJson(appPath, {
     id: 'start-test',
     title: 'Start Test',
     workspace: './workspace',
+    extensions: ['./extension.js'],
     domains: ['./domain.fwe.json']
   });
   writeJson(otherAppPath, {
@@ -158,11 +175,62 @@ test('CLI reuses the running app and rejects a different app on the same port', 
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  const runningApp = await requestPublicApp(`http://${DEFAULT_TEST_HOST}:${port}`);
+  assert.equal(runningApp.launchRevision, app.launchRevision);
   await main(['--app', appPath, '--host', DEFAULT_TEST_HOST, '--port', String(port), '--no-open']);
+
+  writeJson(path.join(workspace, 'settings.json'), { changed: true });
+  assert.equal(loadAppConfig(appPath).launchRevision, app.launchRevision);
+
+  fs.writeFileSync(extensionPath, 'module.exports = function changedSetup() {};\n', 'utf8');
+  assert.notEqual(loadAppConfig(appPath).launchRevision, app.launchRevision);
+  await assert.rejects(
+    main(['--app', appPath, '--host', DEFAULT_TEST_HOST, '--port', String(port), '--no-open']),
+    /outdated server/
+  );
   await assert.rejects(
     main(['--app', otherAppPath, '--host', DEFAULT_TEST_HOST, '--port', String(port), '--no-open']),
     /already serving "Start Test"/
   );
+});
+
+test('launch revision includes shared extension dependencies inside the workspace', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fwe-shared-extension-revision-test-'));
+  const workspace = path.join(root, 'workspace');
+  const appDir = path.join(workspace, 'editor');
+  const sharedDir = path.join(workspace, 'shared');
+  fs.mkdirSync(appDir, { recursive: true });
+  fs.mkdirSync(sharedDir, { recursive: true });
+  const sharedPath = path.join(sharedDir, 'shared.js');
+  const extensionPath = path.join(appDir, 'extension.js');
+  fs.writeFileSync(sharedPath, 'module.exports = { value: 1 };\n', 'utf8');
+  fs.writeFileSync(extensionPath, "const shared = require('../shared/shared'); module.exports = function setup() { return shared.value; };\n", 'utf8');
+  writeJson(path.join(appDir, 'domain.fwe.json'), {
+    id: 'settings',
+    kind: 'document',
+    source: { type: 'single-json', path: '.', fileName: 'settings.json' },
+    model: { type: 'object' }
+  });
+  const appPath = path.join(appDir, 'app.fwe.json');
+  writeJson(appPath, {
+    id: 'shared-revision-test',
+    workspace: '..',
+    extensions: ['./extension.js'],
+    domains: ['./domain.fwe.json']
+  });
+  const previous = process.cwd();
+  process.chdir(appDir);
+  t.after(() => {
+    process.chdir(previous);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  const before = loadAppConfig(appPath).launchRevision;
+  fs.writeFileSync(sharedPath, 'module.exports = { value: 2 };\n', 'utf8');
+  delete require.cache[require.resolve(sharedPath)];
+  delete require.cache[require.resolve(extensionPath)];
+  const after = loadAppConfig(appPath).launchRevision;
+  assert.notEqual(after, before);
 });
 
 function readJson(file) {

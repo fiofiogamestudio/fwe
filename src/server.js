@@ -1,6 +1,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { URL } = require('url');
 const { spawn } = require('child_process');
 const { compileFweDsl, collectFweDslUses } = require('./dsl');
@@ -13,6 +14,9 @@ const MODEL_TEMPLATES_DIR = path.join(TEMPLATES_DIR, 'models');
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 3219;
 const BODY_LIMIT = 8 * 1024 * 1024;
+const LAUNCH_REVISION_VERSION = 'fwe-launch-v1';
+const LAUNCH_REVISION_EXTENSIONS = new Set(['.cjs', '.css', '.fwe', '.html', '.js', '.json', '.mjs']);
+const LAUNCH_REVISION_IGNORED_DIRECTORIES = new Set(['.git', 'node_modules']);
 
 function parseArgs(argv, env = process.env) {
   const noBrowser = env.FWE_NO_BROWSER === '1';
@@ -146,6 +150,10 @@ function reuseRunningApp(app, runningApp, browserUrl, port, options = {}) {
     throw new Error(`Port ${port} is already serving${owner}, not "${app.title}".`);
   }
 
+  if (!runningApp.launchRevision || runningApp.launchRevision !== app.launchRevision) {
+    throw new Error(`"${app.title}" has an outdated server on port ${port}. Stop the old server and start again.`);
+  }
+
   const expectedRevision = app.labels && app.labels.editorRevision;
   const runningRevision = runningApp.labels && runningApp.labels.editorRevision;
   if (expectedRevision && runningRevision !== expectedRevision) {
@@ -224,6 +232,79 @@ function labelFromId(value) {
 function isInside(parent, child) {
   const relative = path.relative(parent, child);
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function createLaunchRevision(appPath, appDir, workspaceDir, domainRefs, clientExtensions) {
+  const files = new Set();
+  addLaunchRevisionFile(files, appPath);
+  addLaunchRevisionFile(files, path.join(FWE_ROOT, 'package.json'));
+  addLaunchRevisionFile(files, path.join(FWE_ROOT, 'bin', 'fwe.js'));
+  collectLaunchRevisionFiles(files, path.join(FWE_ROOT, 'src'));
+  collectLaunchRevisionFiles(files, path.join(FWE_ROOT, 'public'));
+  collectLaunchRevisionFiles(files, path.join(FWE_ROOT, 'templates'));
+  collectLaunchRevisionFiles(files, path.join(appDir, 'domains'));
+  collectLaunchRevisionFiles(files, path.join(appDir, 'extensions'));
+
+  for (const ref of domainRefs) {
+    if (typeof ref === 'string') {
+      addLaunchRevisionFile(files, path.resolve(appDir, ref));
+    }
+  }
+  for (const extension of clientExtensions) {
+    addLaunchRevisionFile(files, extension.path);
+  }
+  for (const module of Object.values(require.cache)) {
+    if (module?.filename && (isInside(appDir, module.filename) || isInside(workspaceDir, module.filename))) {
+      addLaunchRevisionFile(files, module.filename);
+    }
+  }
+
+  if (fs.existsSync(appDir)) {
+    for (const entry of fs.readdirSync(appDir, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.toLowerCase().endsWith('.config.json')) {
+        addLaunchRevisionFile(files, path.join(appDir, entry.name));
+      }
+    }
+  }
+
+  const hash = crypto.createHash('sha256');
+  hash.update(`${LAUNCH_REVISION_VERSION}\0`);
+  hash.update(`${normalizeLaunchRevisionPath(appPath)}\0`);
+  for (const file of [...files].sort((left, right) => left.localeCompare(right))) {
+    hash.update(`${normalizeLaunchRevisionPath(file)}\0`);
+    hash.update(fs.readFileSync(file));
+    hash.update('\0');
+  }
+  return `${LAUNCH_REVISION_VERSION}:${hash.digest('hex')}`;
+}
+
+function collectLaunchRevisionFiles(files, root) {
+  if (!fs.existsSync(root)) {
+    return;
+  }
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (entry.isDirectory() && LAUNCH_REVISION_IGNORED_DIRECTORIES.has(entry.name)) {
+      continue;
+    }
+    const fullPath = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      collectLaunchRevisionFiles(files, fullPath);
+    } else if (entry.isFile() && LAUNCH_REVISION_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
+      addLaunchRevisionFile(files, fullPath);
+    }
+  }
+}
+
+function addLaunchRevisionFile(files, file) {
+  const fullPath = path.resolve(file);
+  if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
+    files.add(fullPath);
+  }
+}
+
+function normalizeLaunchRevisionPath(file) {
+  const value = toPosix(path.resolve(file));
+  return process.platform === 'win32' ? value.toLowerCase() : value;
 }
 
 function resolveUnderWorkspace(workspaceDir, rawPath, label) {
@@ -325,6 +406,7 @@ function loadAppConfig(appPathInput) {
   };
 
   assertUnique(app.domains.map((domain) => domain.id), 'domain id');
+  app.launchRevision = createLaunchRevision(appPath, appDir, workspaceDir, domainRefs, clientExtensions);
   return app;
 }
 
@@ -1043,6 +1125,7 @@ function publicApp(app) {
   return {
     id: app.id,
     title: app.title,
+    launchRevision: app.launchRevision,
     labels: app.labels || {},
     workspace: toPosix(path.relative(app.appDir, app.workspaceDir)) || '.',
     domains: app.domains.map((domain) => ({
