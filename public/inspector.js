@@ -786,7 +786,9 @@ function renderInspectorFormExtensionField(field, target, context, hooks = {}) {
   const wrapper = document.createElement('div');
   wrapper.className = 'field field--form-extension';
 
-  const labelText = `${field.label || field.path || formExtensionId}${field.required ? ' *' : ''}`;
+  const labelText = field.label === false
+    ? ''
+    : `${field.label || field.path || formExtensionId}${field.required ? ' *' : ''}`;
   if (labelText) {
     const label = document.createElement('span');
     label.className = 'field__label';
@@ -841,6 +843,19 @@ function createInspectorFormExtensionContext(field, target, context, formExtensi
   const formContext = {
     app: state.app,
     domain: state.domain,
+    get data() {
+      return state.data;
+    },
+    get file() {
+      return state.file;
+    },
+    get selection() {
+      return {
+        key: state.selectedKey,
+        edge: state.selectedEdge,
+        workbench: state.workbench
+      };
+    },
     field,
     target,
     context,
@@ -1279,11 +1294,11 @@ function afterInspectorEdit(context, field, forceRefresh = false) {
   renderDiagnostics();
   if (state.domain.kind === 'graph') {
     renderGraph();
+    if (forceRefresh || field.refresh) {
+      renderInspector();
+    }
   } else {
     render();
-  }
-  if (forceRefresh || field.refresh) {
-    renderInspector();
   }
   updateActionButtons();
 }

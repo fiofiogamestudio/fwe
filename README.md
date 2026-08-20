@@ -421,7 +421,24 @@ Client extension:
 }());
 ```
 
-Form context includes `field`, `target`, `value`, path helpers, option helpers, `setValue`, `onChange`, and `renderInspector`.
+Form context includes `app`, `domain`, `data`, `file`, `selection`, `context`, `field`, `target`, `value`, path helpers, option helpers, `setValue`, `onChange`, and `renderInspector`. Set a field's `label` to `false` when the extension renders the complete field surface and does not need an outer label.
+
+For a document whose root form should occupy the main editor area instead of the side inspector, use the built-in form view's page presentation:
+
+```json
+{
+  "view": [
+    {
+      "type": "form",
+      "view": "form-json",
+      "presentation": "page",
+      "modes": ["form"]
+    }
+  ]
+}
+```
+
+The page presentation keeps the normal FWE resource bar, history, validation, and save lifecycle. It only changes where the root form is rendered.
 
 ## Compatibility Aliases
 

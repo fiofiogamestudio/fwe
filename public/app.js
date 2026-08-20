@@ -2098,6 +2098,16 @@ function createViewContext(viewSpec) {
     },
     render,
     renderInspector,
+    renderRootForm(host = documentTree) {
+      host.innerHTML = '';
+      const rootContext = buildRootInspectorContext();
+      const form = resolveInspectorForm(rootContext) || createAutoInspectorForm(rootContext);
+      if (form) {
+        renderInspectorForm(form, rootContext, host);
+      } else {
+        renderInspectorReadonly(rootContext, host);
+      }
+    },
     renderInspectorMode,
     renderDocument,
     renderTable,
@@ -2533,6 +2543,8 @@ function renderCollectionBrowser(collection) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = `collection-item${state.selectedKey === pathText ? ' is-active' : ''}`;
+    button.dataset.collectionId = collection.id;
+    button.dataset.itemId = String(getCollectionItemId(collection, item, index));
     button.innerHTML = `
       <span class="collection-item__title">${escapeHtml(getCollectionItemTitle(collection, item, index))}</span>
       <span class="collection-item__meta">${escapeHtml(getCollectionItemSubtitle(collection, item) || String(getCollectionItemId(collection, item, index)))}</span>
@@ -2727,6 +2739,8 @@ function renderCollectionGrid(collection) {
     const card = document.createElement('button');
     card.type = 'button';
     card.className = `collection-grid-card${state.selectedKey === getCollectionItemPath(collection, index) ? ' is-active' : ''}`;
+    card.dataset.collectionId = collection.id;
+    card.dataset.itemId = String(getCollectionItemId(collection, item, index));
     const title = document.createElement('span');
     title.className = 'collection-grid-card__title';
     title.textContent = getCollectionItemTitle(collection, item, index);
@@ -3395,6 +3409,21 @@ function validateObjectRule(rule, diagnostics) {
       } else if ((rule.min !== undefined && value.length < Number(rule.min)) || (rule.max !== undefined && value.length > Number(rule.max))) {
         pushDiagnostic(diagnostics, rule, target.path, rule.message || `条目数量不合法 ${target.path}: ${value.length}`);
       }
+    } else if (normalizedKind === 'diagnostics') {
+      const basePath = target.path.replace(/\.diagnostics$/, '');
+      ensureArray(value).forEach((issue) => {
+        const entry = issue && typeof issue === 'object'
+          ? issue
+          : { message: String(issue || '') };
+        if (!entry.message) {
+          return;
+        }
+        diagnostics.push({
+          path: basePath,
+          message: String(entry.message),
+          level: String(entry.level || rule.level || 'error')
+        });
+      });
     } else if (normalizedKind === 'refexists') {
       validateReferenceExists(value, rule, target.path, diagnostics);
     }

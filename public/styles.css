@@ -391,6 +391,21 @@ button:disabled {
   min-width: 0;
 }
 
+.json-tree.form-page {
+  width: min(100%, 960px);
+  margin-inline: auto;
+  padding: 18px;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+
+.json-tree.form-page .inspector-group {
+  padding: 14px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+
 .inspector-group {
   display: grid;
   gap: 10px;

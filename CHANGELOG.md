@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added main-area `form-json` page presentation while preserving native resource, history, validation, and save behavior.
+- Exposed resource data, file metadata, and structured selection to form extensions.
+- Added collection/item data attributes and structured diagnostics validation for native Workbench hosts.
+- Fixed no-inspector Workbenches instantiating a second hidden form and fixed duplicate non-graph form rendering after edits.
 - Added a reusable browser multi-select control with grouped/count options, bulk actions, popup lifecycle handling, and a stable `fwe.ui` API.
 - Added one canonical `start.bat` that opens the bundled example app.
 - Reused an already-running copy of the same app and rejected unrelated services on the configured port.
