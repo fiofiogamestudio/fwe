@@ -869,6 +869,10 @@ function createInspectorFormExtensionContext(field, target, context, formExtensi
     getOptions(sourceField = field) {
       return buildInspectorOptions(sourceField, context, target);
     },
+    navigation: fweRuntime.navigation,
+    createResourceLink(options = {}) {
+      return fweRuntime.ui.createResourceLink(options);
+    },
     selectPath(pathText) {
       state.selectedKey = pathText || '';
       state.selectedEdge = null;

@@ -459,6 +459,44 @@
     return control;
   }
 
+  function createResourceLink(runtime, options = {}) {
+    const link = window.document.createElement('a');
+    const navigation = options.navigation && typeof options.navigation === 'object'
+      ? options.navigation
+      : options;
+    const label = options.label ?? options.text ?? navigation.itemId ?? navigation.fileName ?? '';
+    const href = options.href || runtime.navigation?.href?.(navigation) || '';
+    const presentation = options.presentation === 'icon' ? 'icon' : 'text';
+    link.className = [
+      'fwe-resource-link',
+      presentation === 'icon' ? 'fwe-resource-link--icon' : '',
+      options.className
+    ]
+      .map((value) => String(value || '').trim())
+      .filter(Boolean)
+      .join(' ');
+    if (presentation === 'icon') {
+      const accessibleLabel = String(options.ariaLabel || options.title || label || 'Open resource');
+      const icon = window.document.createElement('span');
+      icon.className = 'fwe-resource-link__icon fwe-resource-link__icon--external-link';
+      icon.setAttribute('aria-hidden', 'true');
+      link.setAttribute('aria-label', accessibleLabel);
+      link.title = String(options.title || accessibleLabel);
+      link.append(icon);
+    } else {
+      link.textContent = String(label);
+      if (options.title) link.title = String(options.title);
+    }
+    if (href) {
+      link.href = href;
+      link.target = options.target || '_blank';
+      if (link.target === '_blank') link.rel = 'noopener noreferrer';
+    } else {
+      link.setAttribute('aria-disabled', 'true');
+    }
+    return link;
+  }
+
   function installBrowserCompatibilityAliases(runtime) {
     runtime.registerRenderer = runtime.registerView;
     runtime.renderer = runtime.registerRenderer;
@@ -490,7 +528,8 @@
       getWorkbenchLayout: (id) => workbenchLayoutRegistry.get(id),
       normalizeWorkbenchLayoutId: options.normalizeWorkbenchLayoutId || normalizeWorkbenchLayoutId,
       ui: {
-        createMultiSelect
+        createMultiSelect,
+        createResourceLink: (linkOptions) => createResourceLink(runtime, linkOptions)
       },
       context: typeof options.context === 'function' ? options.context : () => null,
       registries: {

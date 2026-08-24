@@ -139,3 +139,53 @@ test('generic multi-select normalizes values and emits framework change events',
   assert.deepEqual(changes.map((change) => change.source), ['select-all', 'clear', 'test']);
   assert.deepEqual([...changes.at(-1).values], ['jiao']);
 });
+
+test('generic resource links delegate href construction to framework navigation', () => {
+  const runtime = createRuntime();
+  runtime.navigation = {
+    href(target) {
+      return `http://127.0.0.1/editor?collection=${target.collectionId}&item=${target.itemId}`;
+    }
+  };
+
+  const link = runtime.ui.createResourceLink({
+    label: '培土',
+    title: '打开印刻',
+    collectionId: 'imprints',
+    itemId: 'rootsheng_cultivate'
+  });
+
+  assert.equal(link.textContent, '培土');
+  assert.equal(link.title, '打开印刻');
+  assert.equal(link.href, 'http://127.0.0.1/editor?collection=imprints&item=rootsheng_cultivate');
+  assert.equal(link.target, '_blank');
+  assert.equal(link.rel, 'noopener noreferrer');
+  assert.equal(link.className, 'fwe-resource-link');
+});
+
+test('generic resource links support accessible icon-only presentation', () => {
+  const runtime = createRuntime();
+  runtime.navigation = {
+    href(target) {
+      return `http://127.0.0.1/editor?collection=${target.collectionId}&item=${target.itemId}`;
+    }
+  };
+
+  const link = runtime.ui.createResourceLink({
+    label: '培土',
+    title: '在新标签页打开印刻：培土',
+    presentation: 'icon',
+    collectionId: 'imprints',
+    itemId: 'rootsheng_cultivate'
+  });
+
+  assert.equal(link.textContent, '');
+  assert.equal(link.title, '在新标签页打开印刻：培土');
+  assert.equal(link.attributes.get('aria-label'), '在新标签页打开印刻：培土');
+  assert.equal(link.href, 'http://127.0.0.1/editor?collection=imprints&item=rootsheng_cultivate');
+  assert.equal(link.target, '_blank');
+  assert.equal(link.className, 'fwe-resource-link fwe-resource-link--icon');
+  assert.equal(link.children.length, 1);
+  assert.equal(link.children[0].className, 'fwe-resource-link__icon fwe-resource-link__icon--external-link');
+  assert.equal(link.children[0].attributes.get('aria-hidden'), 'true');
+});

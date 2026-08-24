@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added generic Workbench resource links with text or accessible icon-button presentation, shareable domain/file/collection/item routes, new-tab opening, and browser-session handoff.
 - Added main-area `form-json` page presentation while preserving native resource, history, validation, and save behavior.
 - Exposed resource data, file metadata, and structured selection to form extensions.
 - Added collection/item data attributes and structured diagnostics validation for native Workbench hosts.

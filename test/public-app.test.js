@@ -81,6 +81,22 @@ test('browser resources expose structured selection and send a stable session he
   assert.match(apiSource, /fweSession\.headers\(optionHeaders\)/);
 });
 
+test('workbench resources expose stable deep links and restore collection items', () => {
+  const hrefSource = readFunctionSource('buildNavigationHref');
+  const applySource = readFunctionSource('applyWorkbenchNavigationTarget');
+  const sessionSource = readFunctionSource('createBrowserSession');
+
+  assert.match(appSource, /fweRuntime\.navigation = \{/);
+  assert.match(appSource, /collectionId: 'fweCollection'/);
+  assert.match(hrefSource, /FWE_NAVIGATION_QUERY\[key\]/);
+  assert.match(hrefSource, /FWE_NAVIGATION_QUERY\.sessionId/);
+  assert.match(applySource, /getCollectionItemId\(collection, item, rowIndex\)/);
+  assert.match(applySource, /state\.workbench\.collectionId = collection\.id/);
+  assert.match(sessionSource, /FWE_NAVIGATION_QUERY\.sessionId/);
+  assert.match(sessionSource, /handoff = true/);
+  assert.match(inspectorSource, /createResourceLink\(options = \{\}\)/);
+});
+
 test('optional-object fields toggle the whole object and render configured child fields', () => {
   assert.match(inspectorSource, /field\.type === 'optional-object'/);
   assert.match(inspectorSource, /function renderInspectorOptionalObjectField\(field, target, context\)/);

@@ -45,6 +45,46 @@ button:disabled {
   opacity: 0.45;
 }
 
+.fwe-resource-link--icon {
+  width: 26px;
+  height: 26px;
+  min-width: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--accent);
+  text-decoration: none;
+  vertical-align: middle;
+}
+
+.fwe-resource-link--icon:hover {
+  border-color: var(--line-strong);
+  background: #f2f5fa;
+}
+
+.fwe-resource-link--icon:focus-visible {
+  outline: 2px solid rgba(81, 110, 158, 0.32);
+  outline-offset: 1px;
+}
+
+.fwe-resource-link--icon[aria-disabled="true"] {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.fwe-resource-link__icon {
+  width: 14px;
+  height: 14px;
+  display: block;
+  background: currentColor;
+  -webkit-mask: url("/icons/external-link.svg") center / contain no-repeat;
+  mask: url("/icons/external-link.svg") center / contain no-repeat;
+  pointer-events: none;
+}
+
 .hidden {
   display: none !important;
 }

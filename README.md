@@ -354,6 +354,22 @@ host.append(filter);
 
 Use `configure(...)` for non-emitting model updates, `value` or `setValue(...)` for selection, `selectAll()` / `clear()` for commands, and `open` / `close()` for popup state. Set `--fwe-multi-select-width`, `--fwe-multi-select-menu-width`, and `--fwe-multi-select-menu-max-height` on the returned element when a host layout needs different dimensions. Keep option discovery and filtering semantics in the host extension.
 
+Workbench references should use FWE resource links instead of assembling app URLs in host code. The helper preserves the current domain, file, and browser session, writes a stable collection/item deep link, and opens a new tab by default:
+
+```js
+const link = ctx.createResourceLink({
+  label: 'Guard (guard)',
+  title: 'Open Buff: Guard',
+  presentation: 'icon',
+  collectionId: 'buffs',
+  itemId: 'guard',
+  mode: 'overview'
+});
+host.append(link);
+```
+
+Use `presentation: 'icon'` for a compact icon-only control. Its `label` or `title` becomes the accessible name and hover tooltip; the host should render the readable resource name as ordinary text beside it. Omitting `presentation` retains a normal text link. The same API is available as `window.fwe.ui.createResourceLink(...)`. Use `window.fwe.navigation.href(...)` when only the URL is needed, `navigate(...)` for same-page navigation, `open(...)` for imperative new-tab navigation, and `restore()` to reapply the current URL after a host-driven resource reload. Collection ids, labels, and reference discovery remain host-domain configuration; FWE owns only routing and link behavior.
+
 Source entries and `read` / `write` / `create` results may include an opaque `meta` object. FWE preserves it without interpreting host semantics. Browser extensions can observe resource state through:
 
 ```js
@@ -362,12 +378,13 @@ await window.fwe.resources.saveCurrent();
 await window.fwe.resources.reloadCurrent();
 await window.fwe.resources.refresh();
 window.fwe.session.id;
+window.fwe.session.handoff;
 window.fwe.session.headers({ 'Content-Type': 'application/json' });
 ```
 
 The shell dispatches `fwe:resources-listed`, `fwe:resource-opened`, `fwe:resource-saved`, `fwe:resource-cleared`, and `fwe:selection-changed` events. Resource snapshots include file metadata, dirty state, and a structured selection with `domainId`, `fileName`, and `key` plus workbench `collectionId`, `collectionPath`, and `itemId` when available. Host extensions should use this lifecycle for provenance, source-control, or adjacent resource UX while leaving their domain rules outside FWE core.
 
-Core API requests automatically send the page's `X-FWE-Session` value. Source-provider contexts and server API-extension handlers receive it as `sessionId`; custom browser fetches must merge `window.fwe.session.headers(...)` into their request headers. The ID survives reloads in one browser session but does not make mutable host state process-global. Headerless tools retain the `default` compatibility session.
+Core API requests automatically send the page's `X-FWE-Session` value. Source-provider contexts and server API-extension handlers receive it as `sessionId`; custom browser fetches must merge `window.fwe.session.headers(...)` into their request headers. The ID survives reloads in one browser session but does not make mutable host state process-global. A resource link marks the destination page's session as `handoff: true`, allowing host extensions to retain server-side context instead of replacing it with empty tab-local state. Headerless tools retain the `default` compatibility session.
 
 Return `true` or omit the return value after handling a request. Return `false` to try the next matching parent prefix and then fwe's normal 404 response. More specific prefixes run first; duplicate prefixes and fwe's reserved `/api/app`, `/api/domains`, and `/api/extensions` routes are rejected. `sendText(status, text, contentType)` accepts an explicit MIME type for scripts and styles. API extensions run in the server process and are trusted code; keep game-specific paths and persistence rules in the host repository.
 
@@ -421,7 +438,7 @@ Client extension:
 }());
 ```
 
-Form context includes `app`, `domain`, `data`, `file`, `selection`, `context`, `field`, `target`, `value`, path helpers, option helpers, `setValue`, `onChange`, and `renderInspector`. Set a field's `label` to `false` when the extension renders the complete field surface and does not need an outer label.
+Form context includes `app`, `domain`, `data`, `file`, `selection`, `context`, `field`, `target`, `value`, path helpers, option helpers, `setValue`, `onChange`, `renderInspector`, `navigation`, and `createResourceLink`. Set a field's `label` to `false` when the extension renders the complete field surface and does not need an outer label.
 
 For a document whose root form should occupy the main editor area instead of the side inspector, use the built-in form view's page presentation:
 

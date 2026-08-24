@@ -43,6 +43,15 @@ const state = {
 };
 let lastSelectionSignature = '';
 
+const FWE_NAVIGATION_QUERY = Object.freeze({
+  domainId: 'fweDomain',
+  fileName: 'fweFile',
+  collectionId: 'fweCollection',
+  itemId: 'fweItem',
+  mode: 'fweMode',
+  sessionId: 'fweSession'
+});
+
 const DEFAULT_LABELS = {
   open: '打开',
   new: '新建',
@@ -167,6 +176,7 @@ const BUILT_IN_VIEW_MODULES = [
 ];
 
 const fweSession = createBrowserSession();
+const initialNavigationTarget = readNavigationTarget();
 
 const fweRuntime = window.createFweRuntime({
   context: () => createViewContext(resolveDomainView(state.domain).spec)
@@ -185,6 +195,13 @@ fweRuntime.resources = {
   saveCurrent: () => saveFile({ force: true }),
   reloadCurrent: () => openSelectedFile({ skipDirtyCheck: true }),
   refresh: () => refreshCurrentResource()
+};
+fweRuntime.navigation = {
+  current: () => currentNavigationTarget(),
+  href: (target = {}) => buildNavigationHref(target),
+  navigate: (target = {}, options = {}) => navigateToResource(target, options),
+  open: (target = {}, options = {}) => openNavigationTarget(target, options),
+  restore: () => navigateToResource(readNavigationTarget(), { skipDirtyCheck: true })
 };
 
 const appTitle = document.querySelector('#appTitle');
@@ -534,7 +551,11 @@ async function init() {
     option.textContent = domain.title;
     domainSelect.append(option);
   }
-  selectDomain(state.app.domains[0]);
+  const initialDomain = state.app.domains.find((domain) => domain.id === initialNavigationTarget.domainId)
+    || state.app.domains[0];
+  if (initialDomain) {
+    await selectDomain(initialDomain, { navigation: initialNavigationTarget });
+  }
 }
 
 function applyAppLabels() {
@@ -637,7 +658,7 @@ function resetWorkbenchState(domain = state.domain) {
   }
 }
 
-async function selectDomain(domain) {
+async function selectDomain(domain, options = {}) {
   state.domain = domain;
   state.file = null;
   state.data = null;
@@ -653,8 +674,16 @@ async function selectDomain(domain) {
   domainSelect.value = domain.id;
   renderDomainSummary();
   await loadFiles();
+  const navigation = normalizeNavigationTarget(options.navigation);
+  if (navigation.fileName) {
+    const requestedFile = state.files.find((file) => file.name === navigation.fileName);
+    if (requestedFile) {
+      state.file = requestedFile;
+      fileSelect.value = requestedFile.name;
+    }
+  }
   if (state.file) {
-    await openSelectedFile({ skipDirtyCheck: true });
+    await openSelectedFile({ skipDirtyCheck: true, navigation });
   } else {
     render();
   }
@@ -704,6 +733,7 @@ async function openSelectedFile(options = {}) {
   state.selectedKey = '';
   state.selectedEdge = null;
   resetWorkbenchState(state.domain);
+  applyWorkbenchNavigationTarget(normalizeNavigationTarget(options.navigation || readNavigationTarget()));
   resetJsonDraftState();
   state.view.resetPending = true;
   state.dirty = false;
@@ -867,6 +897,155 @@ function currentSelectionSnapshot() {
     collectionPath: collection.path,
     itemId: String(getCollectionItemId(collection, selected.item, selected.index))
   };
+}
+
+function normalizeNavigationTarget(target = {}) {
+  const source = target && typeof target === 'object' ? target : {};
+  return {
+    domainId: String(source.domainId ?? source.domain ?? '').trim(),
+    fileName: String(source.fileName ?? source.file ?? '').trim(),
+    collectionId: String(source.collectionId ?? source.collection ?? '').trim(),
+    itemId: String(source.itemId ?? source.item ?? '').trim(),
+    mode: String(source.mode ?? '').trim()
+  };
+}
+
+function readNavigationTarget(locationValue = window.location) {
+  const url = new URL(locationValue?.href || window.location.href);
+  return normalizeNavigationTarget({
+    domainId: url.searchParams.get(FWE_NAVIGATION_QUERY.domainId),
+    fileName: url.searchParams.get(FWE_NAVIGATION_QUERY.fileName),
+    collectionId: url.searchParams.get(FWE_NAVIGATION_QUERY.collectionId),
+    itemId: url.searchParams.get(FWE_NAVIGATION_QUERY.itemId),
+    mode: url.searchParams.get(FWE_NAVIGATION_QUERY.mode)
+  });
+}
+
+function currentNavigationTarget() {
+  const selection = currentSelectionSnapshot();
+  return normalizeNavigationTarget({
+    domainId: selection.domainId,
+    fileName: selection.fileName,
+    collectionId: selection.collectionId || state.workbench.collectionId,
+    itemId: selection.itemId,
+    mode: state.workbench.mode
+  });
+}
+
+function buildNavigationHref(target = {}) {
+  const requested = normalizeNavigationTarget(target);
+  const current = currentNavigationTarget();
+  const navigation = {
+    domainId: requested.domainId || current.domainId,
+    fileName: requested.fileName || current.fileName,
+    collectionId: requested.collectionId || current.collectionId,
+    itemId: requested.itemId || current.itemId,
+    mode: requested.mode || current.mode
+  };
+  const url = new URL(window.location.href);
+  Object.values(FWE_NAVIGATION_QUERY).forEach((key) => url.searchParams.delete(key));
+  Object.entries(navigation).forEach(([key, value]) => {
+    if (value) url.searchParams.set(FWE_NAVIGATION_QUERY[key], value);
+  });
+  if (fweSession?.id) {
+    url.searchParams.set(FWE_NAVIGATION_QUERY.sessionId, fweSession.id);
+  }
+  return url.href;
+}
+
+function openNavigationTarget(target = {}, options = {}) {
+  const href = buildNavigationHref(target);
+  return window.open(
+    href,
+    options.target || '_blank',
+    options.features || 'noopener,noreferrer'
+  );
+}
+
+async function navigateToResource(target = {}, options = {}) {
+  const navigation = normalizeNavigationTarget(target);
+  const domain = state.app?.domains?.find((item) => item.id === (navigation.domainId || state.domain?.id));
+  if (!domain) {
+    setStatus(`Unknown navigation domain: ${navigation.domainId || '(empty)'}`, true);
+    return false;
+  }
+  if (!options.skipDirtyCheck && domain.id !== state.domain?.id && !confirmDiscardChanges()) {
+    return false;
+  }
+  if (domain.id !== state.domain?.id) {
+    await selectDomain(domain, { navigation });
+    return navigationMatchesCurrentSelection(navigation);
+  }
+
+  if (navigation.fileName && navigation.fileName !== state.file?.name) {
+    const file = state.files.find((item) => item.name === navigation.fileName);
+    if (!file) {
+      setStatus(`Unknown navigation file: ${navigation.fileName}`, true);
+      return false;
+    }
+    if (!options.skipDirtyCheck && !confirmDiscardChanges()) {
+      return false;
+    }
+    state.file = file;
+    fileSelect.value = file.name;
+    await openSelectedFile({ skipDirtyCheck: true, navigation });
+    return navigationMatchesCurrentSelection(navigation);
+  }
+
+  const applied = applyWorkbenchNavigationTarget(navigation);
+  if (!applied) {
+    return false;
+  }
+  if (options.updateUrl === true) {
+    window.history.pushState(null, '', buildNavigationHref(navigation));
+  }
+  resetJsonDraftState();
+  render();
+  return true;
+}
+
+function applyWorkbenchNavigationTarget(target = {}) {
+  const navigation = normalizeNavigationTarget(target);
+  if (!navigation.collectionId || !isCollectionWorkbench()) {
+    return false;
+  }
+  if (navigation.domainId && navigation.domainId !== state.domain?.id) {
+    return false;
+  }
+  if (navigation.fileName && navigation.fileName !== state.file?.name) {
+    return false;
+  }
+  const collection = getWorkbenchCollections().find((item) => item.id === navigation.collectionId);
+  if (!collection) {
+    setStatus(`Unknown navigation collection: ${navigation.collectionId}`, true);
+    return false;
+  }
+  const rows = getCollectionRows(collection);
+  const index = navigation.itemId
+    ? rows.findIndex((item, rowIndex) => String(getCollectionItemId(collection, item, rowIndex)) === navigation.itemId)
+    : (rows.length > 0 ? 0 : -1);
+  if (index < 0) {
+    setStatus(`Unknown navigation item: ${navigation.collectionId}/${navigation.itemId}`, true);
+    return false;
+  }
+  state.workbench.collectionId = collection.id;
+  state.selectedKey = getCollectionItemPath(collection, index);
+  const modes = getCollectionModes(collection);
+  state.workbench.mode = modes.some((mode) => mode.id === navigation.mode)
+    ? navigation.mode
+    : getCollectionDefaultMode(collection);
+  state.workbench.variant = '';
+  return true;
+}
+
+function navigationMatchesCurrentSelection(target = {}) {
+  const expected = normalizeNavigationTarget(target);
+  const current = currentNavigationTarget();
+  return (!expected.domainId || expected.domainId === current.domainId)
+    && (!expected.fileName || expected.fileName === current.fileName)
+    && (!expected.collectionId || expected.collectionId === current.collectionId)
+    && (!expected.itemId || expected.itemId === current.itemId)
+    && (!expected.mode || expected.mode === current.mode);
 }
 
 function dispatchSelectionIfChanged() {
@@ -2125,6 +2304,10 @@ function createViewContext(viewSpec) {
       renderInspectorMode();
     },
     setStatus,
+    navigation: fweRuntime.navigation,
+    createResourceLink(options = {}) {
+      return fweRuntime.ui.createResourceLink(options);
+    },
     refs: state.domain?.refs || {}
   };
   return addViewContextCompatibilityAliases(context, viewSpec);
@@ -3735,10 +3918,20 @@ async function api(path, options = {}) {
 function createBrowserSession() {
   const storageKey = 'fwe.browser-session.v1';
   let id = '';
+  let handoff = false;
   try {
-    id = String(window.sessionStorage.getItem(storageKey) || '').trim();
+    const sharedId = String(new URL(window.location.href).searchParams.get(FWE_NAVIGATION_QUERY.sessionId) || '').trim();
+    if (/^[A-Za-z0-9._:-]{8,128}$/.test(sharedId)) {
+      id = sharedId;
+      handoff = true;
+    }
   } catch {
     id = '';
+  }
+  try {
+    if (!id) id = String(window.sessionStorage.getItem(storageKey) || '').trim();
+  } catch {
+    // Keep a valid navigation handoff id when storage is unavailable.
   }
   if (!/^[A-Za-z0-9._:-]{8,128}$/.test(id)) {
     const random = window.crypto?.randomUUID?.()
@@ -3752,6 +3945,7 @@ function createBrowserSession() {
   }
   return Object.freeze({
     id,
+    handoff,
     header: 'X-FWE-Session',
     headers(input = {}) {
       return { ...(input || {}), 'X-FWE-Session': id };
