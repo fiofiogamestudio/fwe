@@ -459,6 +459,142 @@
     return control;
   }
 
+  function normalizeCollectionFilters(collection = {}) {
+    const source = Array.isArray(collection.filters)
+      ? collection.filters
+      : (Array.isArray(collection.facets) ? collection.facets : []);
+    const seen = new Set();
+    return source
+      .filter((filter) => filter && typeof filter === 'object' && !Array.isArray(filter))
+      .map((filter, index) => {
+        const id = String(filter.id || filter.path || `filter_${index + 1}`).trim();
+        return {
+          ...filter,
+          id,
+          label: String(filter.label || filter.title || id).trim() || id,
+          match: String(filter.match || 'any').trim().toLowerCase() === 'all' ? 'all' : 'any'
+        };
+      })
+      .filter((filter) => {
+        if (!filter.id || seen.has(filter.id)) return false;
+        seen.add(filter.id);
+        return true;
+      });
+  }
+
+  function resolveCollectionFilterOptions(filter = {}, data = {}) {
+    const config = getCollectionFilterOptionConfig(filter);
+    const configuredItems = Array.isArray(filter.options)
+      ? filter.options
+      : (Array.isArray(config.items) ? config.items : null);
+    const source = configuredItems || normalizeFilterValues(readFilterPath(data, config.path || filter.optionsPath));
+    const defaultWhen = normalizeFilterValues(config.defaultWhen || filter.optionDefaultWhen);
+    const seen = new Set();
+    return source
+      .map((entry) => {
+        const value = entry && typeof entry === 'object'
+          ? readFilterPath(entry, config.value || filter.optionValue || 'value') ?? entry.id
+          : entry;
+        const normalizedValue = String(value ?? '').trim();
+        if (!normalizedValue || seen.has(normalizedValue)) return null;
+        seen.add(normalizedValue);
+        const label = entry && typeof entry === 'object'
+          ? readFilterPath(entry, config.label || filter.optionLabel || 'label') ?? entry.name ?? normalizedValue
+          : normalizedValue;
+        const count = entry && typeof entry === 'object'
+          ? readFilterPath(entry, config.count || filter.optionCount || '')
+          : undefined;
+        const group = entry && typeof entry === 'object'
+          ? readFilterPath(entry, config.group || filter.optionGroup || '')
+          : '';
+        const members = entry && typeof entry === 'object'
+          ? normalizeFilterValues(readFilterPath(entry, config.members || filter.optionMembers || ''))
+          : [];
+        const defaultSelected = entry && typeof entry === 'object'
+          ? defaultWhen.some((pathText) => Boolean(readFilterPath(entry, pathText)))
+          : false;
+        return {
+          value: normalizedValue,
+          label: String(label ?? normalizedValue),
+          group: String(group ?? '').trim(),
+          count,
+          members: members.map((member) => String(member)),
+          defaultSelected
+        };
+      })
+      .filter(Boolean);
+  }
+
+  function getDefaultCollectionFilterSelection(filter = {}, options = []) {
+    const configured = filter.defaultSelected ?? filter.default;
+    if (Array.isArray(configured)) {
+      return normalizeCollectionFilterSelection(configured, options);
+    }
+    if (String(configured || '').trim().toLowerCase() === 'none') {
+      return [];
+    }
+    if (String(configured || '').trim().toLowerCase() === 'all') {
+      return options.map((option) => option.value);
+    }
+    const marked = options.filter((option) => option.defaultSelected).map((option) => option.value);
+    return marked.length ? marked : options.map((option) => option.value);
+  }
+
+  function normalizeCollectionFilterSelection(values, options = []) {
+    const available = new Set(options.map((option) => option.value));
+    return normalizeFilterValues(values)
+      .map((value) => String(value))
+      .filter((value) => available.has(value));
+  }
+
+  function getCollectionFilterMatches(filter = {}, options = [], item = {}, index = 0) {
+    const config = getCollectionFilterOptionConfig(filter);
+    if (config.members || filter.optionMembers) {
+      const itemValue = readFilterPath(item, filter.itemValue || filter.itemPath || 'id');
+      const normalizedItemValue = String(itemValue ?? index + 1);
+      return options
+        .filter((option) => option.members.includes(normalizedItemValue))
+        .map((option) => option.value);
+    }
+    const itemValues = normalizeFilterValues(readFilterPath(item, filter.itemPath || filter.path || filter.id))
+      .map((value) => String(value));
+    const itemValueSet = new Set(itemValues);
+    return options.filter((option) => itemValueSet.has(option.value)).map((option) => option.value);
+  }
+
+  function matchesCollectionFilter(filter = {}, options = [], selectedValues = [], item = {}, index = 0) {
+    if (!options.length) return true;
+    const selected = normalizeCollectionFilterSelection(selectedValues, options);
+    if (!selected.length) return false;
+    const matches = new Set(getCollectionFilterMatches(filter, options, item, index));
+    return filter.match === 'all'
+      ? selected.every((value) => matches.has(value))
+      : selected.some((value) => matches.has(value));
+  }
+
+  function getCollectionFilterOptionConfig(filter = {}) {
+    return filter.options && typeof filter.options === 'object' && !Array.isArray(filter.options)
+      ? filter.options
+      : {};
+  }
+
+  function normalizeFilterValues(value) {
+    if (Array.isArray(value)) return value;
+    if (value === undefined || value === null || value === '') return [];
+    return [value];
+  }
+
+  function readFilterPath(target, pathText) {
+    const path = String(pathText || '').trim();
+    if (!path) return undefined;
+    const parts = [];
+    path.replace(/([^.[\]]+)|\[(\d+)\]/g, (_, key, index) => {
+      parts.push(key !== undefined ? key : Number(index));
+      return '';
+    });
+    return parts.reduce((value, part) => value?.[part], target);
+  }
+
   function createResourceLink(runtime, options = {}) {
     const link = window.document.createElement('a');
     const navigation = options.navigation && typeof options.navigation === 'object'
@@ -530,6 +666,14 @@
       ui: {
         createMultiSelect,
         createResourceLink: (linkOptions) => createResourceLink(runtime, linkOptions)
+      },
+      collectionFilters: {
+        normalize: normalizeCollectionFilters,
+        resolveOptions: resolveCollectionFilterOptions,
+        defaultSelection: getDefaultCollectionFilterSelection,
+        normalizeSelection: normalizeCollectionFilterSelection,
+        matchingValues: getCollectionFilterMatches,
+        matches: matchesCollectionFilter
       },
       context: typeof options.context === 'function' ? options.context : () => null,
       registries: {

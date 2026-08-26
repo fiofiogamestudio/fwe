@@ -163,6 +163,8 @@ view graph nodes {
 
 Free graph positions are stored as integers. With `grid 10`, `{ "x": 12, "y": 8 }` renders at `120px, 80px`.
 
+JSON graph domains may use `nodeViews` to give each node collection its own badge, title, body, and labeled detail rows. A grid graph may also declare `derivedEdges.type: "orthogonal-grid"`; FWE then connects Manhattan-adjacent positions unless an explicit configured link list is present. These options change presentation and edge discovery only; node data remains owned by the host domain.
+
 ## Workbench
 
 Use `workbench` when one domain needs multiple collections, shared search, item forms, previews, references, or a custom workspace-like composition.
@@ -213,6 +215,34 @@ view workbench {
 ```
 
 `layout` controls the whole workbench shape. `default` controls the initial workbench state. `list` controls how one collection list is shown. `modes` controls the selected item editor.
+
+Large JSON Workbench definitions may declare ordered `collectionGroups` and assign each collection with `group`. The catalog renders a compact group/collection navigator; Workbenches without groups keep the original single-level tabs.
+
+Catalog collections can declare reusable multi-select filters. Filters combine with AND, while selected options inside one filter combine with OR. Clearing one filter intentionally shows no rows. Options may compare directly against an item field or declare a relation through an option-owned member list:
+
+```json
+{
+  "id": "records",
+  "path": "records",
+  "filters": [
+    {
+      "id": "pool",
+      "label": "Pool",
+      "itemValue": "id",
+      "options": {
+        "path": "metadata.pools",
+        "value": "id",
+        "label": "name",
+        "count": "memberCount",
+        "members": "memberIds",
+        "defaultWhen": ["primary"]
+      }
+    }
+  ]
+}
+```
+
+Without `members`, set `itemPath` to the scalar or array field matched against option values. `default` accepts `"all"`, `"none"`, or an explicit value array. When `default` is omitted, options matching any `defaultWhen` field are selected; if none are marked, all options are selected. Filter state is reset when a resource changes, and deep links automatically reveal their target through configured relational filters.
 
 Compatibility input is still accepted: old `view browser` maps to `view workbench { layout catalog }`, old `view sidepanel` maps to `view workbench { layout panels }`, old collection `layouts` maps to `list`, and old `defaultCollection/defaultList/defaultMode` maps to `default { collection/list/mode }`.
 
@@ -332,6 +362,10 @@ module.exports = (fwe) => {
 };
 ```
 
+Every successful read carries an opaque revision token. Built-in sources derive it from the physical content, and FWE derives one for custom sources that omit it. The browser returns that revision on save; a stale write receives HTTP `409` with a `revision-conflict` issue instead of overwriting an external change. Custom sources may return their own revision when host semantics need a different comparison boundary.
+
+Built-in JSON, text, and multi-file writes prepare temporary files before replacing targets and roll back already-replaced targets if a later replacement fails. A custom source remains responsible for its own aggregate host transaction because only the host knows which physical resources belong to one logical save.
+
 ### Reusable Browser Controls
 
 Custom views should use FWE controls for interaction patterns that are not domain-specific. The multi-select control owns its popup, grouping, counts, select-all/clear actions, outside-click and Escape handling, and change events. The host supplies only labels, items, selected values, and domain behavior:
@@ -393,12 +427,29 @@ Return `true` or omit the return value after handling a request. Return `false` 
 ```powershell
 npm test
 npm run test:browser
+npm run test:all
 npm run pack:dry
 ```
 
-`npm test` runs syntax, example compilation, and unit tests on Node.js 18 or newer. `test:browser` additionally requires Node.js 22 or newer and a local Chrome or Chromium installation; it checks every example domain for browser errors, layout overflow, and graph add/undo behavior.
+`npm test` runs syntax, example compilation, and unit tests on Node.js 18 or newer. `test:browser` additionally requires Node.js 22 or newer and a local Chrome or Chromium installation; it checks every example domain for browser errors, layout overflow, and graph add/undo behavior. `test:all` runs both suites and verifies the published package contents.
 
 ## Form Extensions
+
+Dynamic select fields can keep stable stored values while presenting readable labels with `optionLabels`:
+
+```json
+{
+  "path": "effect",
+  "type": "select",
+  "optionsFrom": "props.effect.values",
+  "optionLabels": {
+    "shake": "Shake",
+    "wave": "Wave"
+  }
+}
+```
+
+Values not present in `optionLabels` retain their source label, so host-defined extensions remain editable.
 
 Use a form extension when one inspector field needs a special control.
 

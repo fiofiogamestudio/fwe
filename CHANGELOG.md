@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added optimistic revisions for built-in and custom sources, transactional built-in writes, stale-write diagnostics, and refresh/close guards for unsaved browser edits.
+- Isolated app launch fingerprints to each app's declared extension dependency graph while retaining shared-dependency change detection.
+- Unified framework tab semantics, roving keyboard focus, accessible status announcements, and configuration-driven shell, markup, and graph-action messages.
+- Added per-collection graph node views, labeled detail rows, orthogonal-grid derived edges, and display-label mappings for dynamic select options.
+- Added declarative catalog collection filters with dynamic options, relational member matching, default selections, detail/grid parity, and deep-link reveal behavior.
 - Added generic Workbench resource links with text or accessible icon-button presentation, shareable domain/file/collection/item routes, new-tab opening, and browser-session handoff.
 - Added main-area `form-json` page presentation while preserving native resource, history, validation, and save behavior.
 - Exposed resource data, file metadata, and structured selection to form extensions.

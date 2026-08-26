@@ -140,6 +140,45 @@ test('generic multi-select normalizes values and emits framework change events',
   assert.deepEqual([...changes.at(-1).values], ['jiao']);
 });
 
+test('collection filters resolve relational options and default selections', () => {
+  const runtime = createRuntime();
+  const collection = {
+    filters: [{
+      id: 'pool',
+      label: '骰组',
+      itemValue: 'id',
+      options: {
+        path: '_editor.dicePools.groups',
+        value: 'id',
+        label: 'name',
+        count: 'matchedDiceCount',
+        members: 'memberDiceIds',
+        defaultWhen: ['starter', 'primary']
+      }
+    }]
+  };
+  const data = {
+    _editor: {
+      dicePools: {
+        groups: [
+          { id: 'starter', name: '基础骰组', starter: true, memberDiceIds: ['basic'], matchedDiceCount: 1 },
+          { id: 'reward', name: '随机遭遇池', primary: true, memberDiceIds: ['reward'], matchedDiceCount: 1 },
+          { id: 'other', name: '其他骰子', memberDiceIds: ['other'], matchedDiceCount: 1 }
+        ]
+      }
+    }
+  };
+
+  const [filter] = runtime.collectionFilters.normalize(collection);
+  const options = runtime.collectionFilters.resolveOptions(filter, data);
+  assert.deepEqual(options.map((option) => option.label), ['基础骰组', '随机遭遇池', '其他骰子']);
+  assert.deepEqual(runtime.collectionFilters.defaultSelection(filter, options), ['starter', 'reward']);
+  assert.equal(runtime.collectionFilters.matches(filter, options, ['starter'], { id: 'basic' }), true);
+  assert.equal(runtime.collectionFilters.matches(filter, options, ['starter'], { id: 'reward' }), false);
+  assert.equal(runtime.collectionFilters.matches(filter, options, [], { id: 'basic' }), false);
+  assert.deepEqual(runtime.collectionFilters.matchingValues(filter, options, { id: 'other' }), ['other']);
+});
+
 test('generic resource links delegate href construction to framework navigation', () => {
   const runtime = createRuntime();
   runtime.navigation = {

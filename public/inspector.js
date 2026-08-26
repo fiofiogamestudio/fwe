@@ -46,6 +46,10 @@ function renderInspectorMode() {
   inspectorJsonView.classList.toggle('hidden', !isJson);
   inspectorFormModeButton.classList.toggle('is-active', !isJson);
   inspectorJsonModeButton.classList.toggle('is-active', isJson);
+  inspectorFormModeButton.setAttribute('aria-selected', String(!isJson));
+  inspectorJsonModeButton.setAttribute('aria-selected', String(isJson));
+  inspectorFormModeButton.tabIndex = isJson ? -1 : 0;
+  inspectorJsonModeButton.tabIndex = isJson ? 0 : -1;
 }
 
 function switchInspectorMode(mode) {
@@ -391,7 +395,7 @@ function buildBlueprintNodeInspectorForm(context) {
     },
     {
       path: spec.nodeType,
-      label: '节点类型',
+      label: getAppLabel('blueprintNodeType'),
       type: 'select',
       options: typeOptions,
       required: true,
@@ -430,9 +434,9 @@ function buildBlueprintNodeInspectorForm(context) {
 
   return {
     groups: [
-      { title: '节点', fields },
-      { title: '输入值', fields: valueFields.length ? valueFields : [{ path: '__none', label: '没有可编辑输入值', type: 'readonly' }] },
-      { title: '位置', fields: posFields }
+      { title: getAppLabel('blueprintNodeGroup'), fields },
+      { title: getAppLabel('blueprintInputGroup'), fields: valueFields.length ? valueFields : [{ path: '__none', label: getAppLabel('blueprintNoEditableInputs'), type: 'readonly' }] },
+      { title: getAppLabel('blueprintPositionGroup'), fields: posFields }
     ]
   };
 }
@@ -649,7 +653,7 @@ function renderInspectorMarkupToolbar(toolbar, tags, field, target, control, con
 
   const label = document.createElement('span');
   label.className = 'markup-toolbar__label';
-  label.textContent = '标记';
+  label.textContent = getAppLabel('markup');
   toolbar.append(label);
 
   tags.forEach((tag) => {
@@ -676,14 +680,14 @@ function wrapInspectorMarkupSelection(input, tagId) {
 
   if (value.slice(Math.max(0, start - open.length), start) === open
     && value.slice(end, end + close.length) === close) {
-    window.alert(`当前选区已经套用了 ${tagId}。`);
+    window.alert(formatAppLabel('markupAlreadyApplied', '当前选区已经套用了 {tagId}。', { tagId }));
     input.focus();
     return false;
   }
 
   const selected = value.slice(start, end);
   if (selected.includes('[') || selected.includes(']')) {
-    window.alert('文本标记不支持嵌套，请先选中纯文本内容。');
+    window.alert(getAppLabel('markupNestedUnsupported'));
     input.focus();
     return false;
   }
@@ -748,7 +752,8 @@ function createInspectorControl(field, value, context, target) {
     options.forEach((item) => {
       const option = document.createElement('option');
       option.value = String(item.value);
-      option.textContent = item.label ?? String(item.value);
+      const mappedLabel = field.optionLabels?.[String(item.value)];
+      option.textContent = mappedLabel ?? item.label ?? String(item.value);
       select.append(option);
     });
     select.value = value === undefined || value === null ? '' : String(value);

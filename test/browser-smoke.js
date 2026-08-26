@@ -58,6 +58,19 @@ async function main() {
           .filter(visible)
           .filter((element) => element.scrollWidth > element.clientWidth + 2)
           .map((element) => ({ className: element.className, clientWidth: element.clientWidth, scrollWidth: element.scrollWidth }));
+        const tabIssues = [...document.querySelectorAll('[role="tablist"]')]
+          .filter(visible)
+          .map((tabList, index) => {
+            const tabs = [...tabList.querySelectorAll('[role="tab"]')]
+              .filter((tab) => tab.closest('[role="tablist"]') === tabList && visible(tab));
+            if (!tabs.length) return null;
+            const selected = tabs.filter((tab) => tab.getAttribute('aria-selected') === 'true');
+            const tabbable = tabs.filter((tab) => tab.tabIndex === 0);
+            return selected.length === 1 && tabbable.length === 1 && selected[0] === tabbable[0]
+              ? null
+              : { index, className: tabList.className, tabs: tabs.length, selected: selected.length, tabbable: tabbable.length };
+          })
+          .filter(Boolean);
         return {
           domain: document.querySelector('#domainSelect')?.value || '',
           file: document.querySelector('#fileSelect')?.value || '',
@@ -66,7 +79,9 @@ async function main() {
           workbenchItems: document.querySelectorAll('.collection-item, .sidepanel-list-item').length,
           previewNodes: document.querySelectorAll('.adventure-route-node').length,
           documentOverflow: document.documentElement.scrollWidth - window.innerWidth,
-          overflow
+          overflow,
+          tabIssues,
+          statusLive: document.querySelector('#statusText')?.getAttribute('aria-live') || ''
         };
       })()`);
       const screenshot = await cdp.call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
@@ -75,6 +90,30 @@ async function main() {
     }
 
     const contentKinds = await inspectContentEditor(cdp, outputDir);
+
+    const tabKeyboard = await evaluate(cdp, `(async () => {
+      const form = document.querySelector('#inspectorFormModeButton');
+      const json = document.querySelector('#inspectorJsonModeButton');
+      if (!form || !json) return { tested: false };
+      form.click();
+      form.focus();
+      form.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const afterRight = {
+        selected: json.getAttribute('aria-selected'),
+        focused: document.activeElement === json
+      };
+      json.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }));
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return {
+        tested: true,
+        afterRight,
+        afterHome: {
+          selected: form.getAttribute('aria-selected'),
+          focused: document.activeElement === form
+        }
+      };
+    })()`);
 
     const graphDomain = app.domains.find((domain) => domain.kind === 'graph');
     let graphMutation = null;
@@ -102,7 +141,17 @@ async function main() {
       }
       if (result.documentOverflow > 2) failures.push(`${result.domain}: document overflow ${result.documentOverflow}px`);
       if (result.overflow.length) failures.push(`${result.domain}: ${result.overflow.length} control overflow(s)`);
+      if (result.tabIssues.length) failures.push(`${result.domain}: ${result.tabIssues.length} invalid tablist(s)`);
+      if (result.statusLive !== 'polite') failures.push(`${result.domain}: status region is not announced politely.`);
     });
+    if (tabKeyboard.tested && (
+      tabKeyboard.afterRight.selected !== 'true'
+      || !tabKeyboard.afterRight.focused
+      || tabKeyboard.afterHome.selected !== 'true'
+      || !tabKeyboard.afterHome.focused
+    )) {
+      failures.push(`Tab keyboard navigation failed: ${JSON.stringify(tabKeyboard)}`);
+    }
     if (graphMutation && !graphMutation.skipped) {
       if (graphMutation.afterAdd !== graphMutation.before + 1) failures.push('Graph add did not create exactly one node.');
       if (graphMutation.afterUndo !== graphMutation.before) failures.push('Graph undo did not restore the node count.');
@@ -152,7 +201,7 @@ async function main() {
       }
     });
 
-    console.log(JSON.stringify({ app: app.id, url: baseUrl, outputDir, results, contentKinds, graphMutation, errors }, null, 2));
+    console.log(JSON.stringify({ app: app.id, url: baseUrl, outputDir, results, contentKinds, tabKeyboard, graphMutation, errors }, null, 2));
     if (failures.length) {
       throw new Error(failures.join('\n'));
     }

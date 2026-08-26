@@ -90,6 +90,143 @@ test('built-in folder-json source lists, reads, and writes inside its workspace'
   assert.equal(readJson(path.join(dataDir, 'items.json')).items[0].name, 'Changed');
 });
 
+test('built-in sources reject stale revisions without overwriting external changes', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fwe-built-in-revision-test-'));
+  const workspace = path.join(root, 'workspace');
+  const file = path.join(workspace, 'settings.json');
+  fs.mkdirSync(workspace, { recursive: true });
+  writeJson(file, { value: 1 });
+  writeJson(path.join(root, 'domain.fwe.json'), {
+    id: 'settings',
+    kind: 'document',
+    title: 'Settings',
+    source: { type: 'single-json', path: 'settings.json' },
+    model: { type: 'object' }
+  });
+  writeJson(path.join(root, 'app.fwe.json'), {
+    id: 'built-in-revision-test',
+    workspace: './workspace',
+    domains: ['./domain.fwe.json']
+  });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const app = loadAppConfig(path.join(root, 'app.fwe.json'));
+  const domain = app.domains[0];
+  const opened = readDomainFile(app, domain, 'settings.json');
+  assert.ok(opened.revision);
+
+  writeJson(file, { value: 2 });
+  assert.throws(
+    () => writeDomainFile(app, domain, 'settings.json', {
+      data: { value: 3 },
+      revision: opened.revision
+    }),
+    (error) => error.status === 409 && error.issues?.[0]?.code === 'revision-conflict'
+  );
+  assert.deepEqual(readJson(file), { value: 2 });
+
+  const refreshed = readDomainFile(app, domain, 'settings.json');
+  const saved = writeDomainFile(app, domain, 'settings.json', {
+    data: { value: 3 },
+    revision: refreshed.revision
+  });
+  assert.ok(saved.revision);
+  assert.notEqual(saved.revision, refreshed.revision);
+  assert.deepEqual(readJson(file), { value: 3 });
+});
+
+test('custom sources receive automatic revisions when providers omit them', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fwe-auto-revision-test-'));
+  const workspace = path.join(root, 'workspace');
+  fs.mkdirSync(workspace, { recursive: true });
+  writeJson(path.join(workspace, 'data.json'), { value: 1 });
+  fs.writeFileSync(path.join(root, 'source.js'), [
+    'module.exports = function register(fwe) {',
+    "  fwe.registerSource('auto-revision', {",
+    "    list() { return [{ name: 'data.json', exists: true }]; },",
+    "    read(ctx) { return { name: 'data.json', type: 'json', data: ctx.readJson('data.json') }; },",
+    "    write(ctx, name, payload) { ctx.writeJson('data.json', payload.data); return { name }; }",
+    '  });',
+    '};',
+    ''
+  ].join('\n'), 'utf8');
+  writeJson(path.join(root, 'domain.fwe.json'), {
+    id: 'data',
+    kind: 'document',
+    source: { type: 'auto-revision', path: '.' },
+    model: { type: 'object' }
+  });
+  writeJson(path.join(root, 'app.fwe.json'), {
+    id: 'auto-revision-test',
+    workspace: './workspace',
+    extensions: ['./source.js'],
+    domains: ['./domain.fwe.json']
+  });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const app = loadAppConfig(path.join(root, 'app.fwe.json'));
+  const domain = app.domains[0];
+  const opened = await readDomainFile(app, domain, 'data.json');
+  assert.ok(opened.revision);
+
+  writeJson(path.join(workspace, 'data.json'), { value: 2 });
+  await assert.rejects(
+    writeDomainFile(app, domain, 'data.json', {
+      data: { value: 3 },
+      revision: opened.revision
+    }),
+    (error) => error.status === 409 && error.issues?.[0]?.code === 'revision-conflict'
+  );
+  assert.deepEqual(readJson(path.join(workspace, 'data.json')), { value: 2 });
+
+  const refreshed = await readDomainFile(app, domain, 'data.json');
+  const saved = await writeDomainFile(app, domain, 'data.json', {
+    data: { value: 3 },
+    revision: refreshed.revision
+  });
+  assert.ok(saved.revision);
+  assert.notEqual(saved.revision, refreshed.revision);
+  assert.deepEqual(readJson(path.join(workspace, 'data.json')), { value: 3 });
+});
+
+test('multi-json writes prepare every file before replacing any target', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fwe-multi-json-transaction-test-'));
+  const workspace = path.join(root, 'workspace');
+  fs.mkdirSync(workspace, { recursive: true });
+  writeJson(path.join(workspace, 'first.json'), { value: 1 });
+  fs.writeFileSync(path.join(workspace, 'blocked'), 'not a directory', 'utf8');
+  writeJson(path.join(root, 'domain.fwe.json'), {
+    id: 'aggregate',
+    kind: 'document',
+    source: {
+      type: 'multi-json',
+      fileName: 'aggregate.json',
+      files: {
+        first: { path: 'first.json', target: 'first' },
+        second: { path: 'blocked/second.json', target: 'second' }
+      }
+    },
+    model: { type: 'object' },
+    defaults: { data: { first: {}, second: {} } }
+  });
+  writeJson(path.join(root, 'app.fwe.json'), {
+    id: 'multi-json-transaction-test',
+    workspace: './workspace',
+    domains: ['./domain.fwe.json']
+  });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const app = loadAppConfig(path.join(root, 'app.fwe.json'));
+  const domain = app.domains[0];
+  const opened = readDomainFile(app, domain, 'aggregate.json');
+  assert.throws(() => writeDomainFile(app, domain, 'aggregate.json', {
+    data: { first: { value: 2 }, second: { value: 2 } },
+    revision: opened.revision
+  }));
+  assert.deepEqual(readJson(path.join(workspace, 'first.json')), { value: 1 });
+  assert.equal(fs.readdirSync(workspace).some((name) => name.endsWith('.tmp') || name.endsWith('.bak')), false);
+});
+
 test('custom source revision tokens round-trip through read and write results', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fwe-source-revision-test-'));
   fs.mkdirSync(path.join(root, 'workspace'), { recursive: true });
@@ -295,6 +432,46 @@ test('launch revision includes shared extension dependencies inside the workspac
   delete require.cache[require.resolve(extensionPath)];
   const after = loadAppConfig(appPath).launchRevision;
   assert.notEqual(after, before);
+});
+
+test('launch revisions do not inherit modules from previously loaded applications', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fwe-launch-revision-isolation-test-'));
+  const workspace = path.join(root, 'workspace');
+  const appDirs = [path.join(workspace, 'app-a'), path.join(workspace, 'app-b')];
+  appDirs.forEach((appDir, index) => {
+    fs.mkdirSync(appDir, { recursive: true });
+    fs.writeFileSync(path.join(appDir, 'extension.js'), `module.exports = function setup${index}() {};\n`, 'utf8');
+    writeJson(path.join(appDir, 'domain.fwe.json'), {
+      id: `settings-${index}`,
+      kind: 'document',
+      source: { type: 'single-json', path: '.', fileName: 'settings.json' },
+      model: { type: 'object' }
+    });
+    writeJson(path.join(appDir, 'app.fwe.json'), {
+      id: `revision-app-${index}`,
+      workspace: '..',
+      extensions: ['./extension.js'],
+      domains: ['./domain.fwe.json']
+    });
+  });
+  t.after(() => {
+    for (const appDir of appDirs) {
+      const extensionPath = path.join(appDir, 'extension.js');
+      try {
+        delete require.cache[require.resolve(extensionPath)];
+      } catch {
+        // The extension may already have been evicted by another config load.
+      }
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  const appBPath = path.join(appDirs[1], 'app.fwe.json');
+  const before = loadAppConfig(appBPath).launchRevision;
+  loadAppConfig(path.join(appDirs[0], 'app.fwe.json'));
+  const after = loadAppConfig(appBPath).launchRevision;
+
+  assert.equal(after, before);
 });
 
 function readJson(file) {

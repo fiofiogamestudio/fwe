@@ -824,6 +824,31 @@ button:disabled {
   gap: 8px;
 }
 
+.collection-tabs.is-grouped {
+  display: grid;
+  gap: 8px;
+}
+
+.collection-tab-groups,
+.collection-tab-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.collection-tab-groups {
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.collection-tab-groups button {
+  flex: 1 1 76px;
+  min-height: 30px;
+  padding-block: 4px;
+  background: #f5f7fa;
+  font-size: 12px;
+}
+
 .collection-tabs button,
 .collection-layout-tabs button,
 .collection-mode-tabs button,
@@ -844,12 +869,35 @@ button:disabled {
   font-weight: 700;
 }
 
+.collection-tab-groups button.is-active {
+  border-color: var(--accent);
+  background: #eef4ff;
+  color: var(--accent);
+}
+
 #collectionSearch {
   width: 100%;
   min-width: 0;
   padding: 9px 10px;
   border: 1px solid var(--line-strong);
   background: #fff;
+}
+
+.collection-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.collection-filters[hidden] {
+  display: none;
+}
+
+.collection-filters fwe-multi-select {
+  width: 100%;
+  --fwe-multi-select-width: 100%;
+  --fwe-multi-select-menu-width: min(280px, calc(100vw - 32px));
 }
 
 .collection-list,
@@ -941,7 +989,7 @@ button:disabled {
 
 .collection-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(248px, 1fr));
   gap: 12px;
 }
 
@@ -962,23 +1010,33 @@ button:disabled {
 }
 
 .collection-grid-card__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 800;
   font-size: 15px;
 }
 
 .collection-grid-card__row {
   display: grid;
-  grid-template-columns: 76px minmax(0, 1fr);
+  grid-template-columns: minmax(76px, 38%) minmax(0, 1fr);
+  align-items: start;
   gap: 8px;
   color: var(--muted);
   font-size: 12px;
+  line-height: 1.35;
 }
 
-.collection-grid-card__row b {
+.collection-grid-card__label,
+.collection-grid-card__value {
   min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.collection-grid-card__value {
   color: var(--text);
   font-weight: 600;
-  overflow-wrap: anywhere;
 }
 
 .collection-json-editor {

@@ -172,23 +172,123 @@ function stripBom(text) {
   return String(text || '').replace(/^\uFEFF/, '');
 }
 
+function hashRevision(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function fileRevision(fullPath) {
+  return hashRevision(fs.readFileSync(fullPath));
+}
+
+function resourceRevision(resource) {
+  const type = resource?.type === 'text' ? 'text' : 'json';
+  const content = type === 'text'
+    ? String(resource?.content ?? '')
+    : JSON.stringify(resource?.data ?? resource?.content ?? null);
+  return hashRevision(`fwe-resource-v1\0${type}\0${content}`);
+}
+
+function revisionConflict(name, expected, actual) {
+  const label = String(name || 'resource');
+  return Object.assign(new Error(`Resource changed on disk: ${label}. Reload it before saving.`), {
+    status: 409,
+    issues: [{
+      path: '',
+      message: `Resource changed on disk: ${label}. Reload it before saving.`,
+      level: 'error',
+      code: 'revision-conflict',
+      expectedRevision: String(expected),
+      actualRevision: String(actual)
+    }]
+  });
+}
+
+function assertRevision(expected, actual, name) {
+  if (expected === undefined || expected === null) return;
+  if (String(expected) !== String(actual)) {
+    throw revisionConflict(name, expected, actual);
+  }
+}
+
 function readJsonFile(fullPath) {
   return JSON.parse(stripBom(fs.readFileSync(fullPath, 'utf8')));
 }
 
 function writeJsonFile(fullPath, data) {
-  ensureParent(fullPath);
-  fs.writeFileSync(fullPath, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+  writeFilesTransaction([{
+    fullPath,
+    content: `${JSON.stringify(data, null, 2)}\n`
+  }]);
 }
 
 function writeTextFile(fullPath, text) {
-  ensureParent(fullPath);
   const normalized = String(text || '').replace(/\r\n?/g, '\n').replace(/\s*$/, '');
-  fs.writeFileSync(fullPath, `${normalized}\n`, 'utf8');
+  writeFilesTransaction([{
+    fullPath,
+    content: `${normalized}\n`
+  }]);
 }
 
 function ensureParent(fullPath) {
   fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+}
+
+function sidecarPath(fullPath, kind) {
+  const token = `${process.pid}-${crypto.randomBytes(8).toString('hex')}`;
+  return path.join(path.dirname(fullPath), `.${path.basename(fullPath)}.${token}.${kind}`);
+}
+
+function writeFilesTransaction(entries) {
+  const prepared = [];
+  let committed = false;
+  try {
+    for (const entry of entries) {
+      const fullPath = path.normalize(entry.fullPath);
+      ensureParent(fullPath);
+      const tempPath = sidecarPath(fullPath, 'tmp');
+      fs.writeFileSync(tempPath, String(entry.content ?? ''), 'utf8');
+      prepared.push({
+        fullPath,
+        tempPath,
+        backupPath: sidecarPath(fullPath, 'bak'),
+        hadOriginal: false,
+        replaced: false
+      });
+    }
+
+    for (const item of prepared) {
+      if (fs.existsSync(item.fullPath)) {
+        fs.renameSync(item.fullPath, item.backupPath);
+        item.hadOriginal = true;
+      }
+      fs.renameSync(item.tempPath, item.fullPath);
+      item.replaced = true;
+    }
+    committed = true;
+  } catch (error) {
+    for (const item of [...prepared].reverse()) {
+      try {
+        if (item.replaced && fs.existsSync(item.fullPath)) {
+          fs.rmSync(item.fullPath, { force: true });
+        }
+        if (item.hadOriginal && fs.existsSync(item.backupPath)) {
+          fs.renameSync(item.backupPath, item.fullPath);
+        }
+      } catch {
+        // Keep any surviving backup beside the target for manual recovery.
+      }
+    }
+    throw error;
+  } finally {
+    for (const item of prepared) {
+      if (fs.existsSync(item.tempPath)) {
+        fs.rmSync(item.tempPath, { force: true });
+      }
+      if (committed && fs.existsSync(item.backupPath)) {
+        fs.rmSync(item.backupPath, { force: true });
+      }
+    }
+  }
 }
 
 function deepMerge(base, override) {
@@ -234,7 +334,7 @@ function isInside(parent, child) {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
-function createLaunchRevision(appPath, appDir, workspaceDir, domainRefs, clientExtensions) {
+function createLaunchRevision(appPath, appDir, workspaceDir, domainRefs, clientExtensions, extensionEntries) {
   const files = new Set();
   addLaunchRevisionFile(files, appPath);
   addLaunchRevisionFile(files, path.join(FWE_ROOT, 'package.json'));
@@ -253,11 +353,7 @@ function createLaunchRevision(appPath, appDir, workspaceDir, domainRefs, clientE
   for (const extension of clientExtensions) {
     addLaunchRevisionFile(files, extension.path);
   }
-  for (const module of Object.values(require.cache)) {
-    if (module?.filename && (isInside(appDir, module.filename) || isInside(workspaceDir, module.filename))) {
-      addLaunchRevisionFile(files, module.filename);
-    }
-  }
+  collectExtensionLaunchRevisionFiles(files, extensionEntries, appDir, workspaceDir);
 
   if (fs.existsSync(appDir)) {
     for (const entry of fs.readdirSync(appDir, { withFileTypes: true })) {
@@ -276,6 +372,41 @@ function createLaunchRevision(appPath, appDir, workspaceDir, domainRefs, clientE
     hash.update('\0');
   }
   return `${LAUNCH_REVISION_VERSION}:${hash.digest('hex')}`;
+}
+
+function collectExtensionLaunchRevisionFiles(files, entries, appDir, workspaceDir) {
+  const visited = new Set();
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const config = typeof entry === 'string' ? { path: entry } : entry || {};
+    if (!config.path || config.runtime === true) {
+      continue;
+    }
+    const extensionPath = path.resolve(appDir, config.path);
+    let resolvedPath;
+    try {
+      resolvedPath = require.resolve(extensionPath);
+    } catch {
+      continue;
+    }
+    collectCachedModuleFiles(files, require.cache[resolvedPath], appDir, workspaceDir, visited);
+  }
+}
+
+function collectCachedModuleFiles(files, module, appDir, workspaceDir, visited) {
+  if (!module?.filename) {
+    return;
+  }
+  const key = normalizeLaunchRevisionPath(module.filename);
+  if (visited.has(key)) {
+    return;
+  }
+  visited.add(key);
+  if (isInside(appDir, module.filename) || isInside(workspaceDir, module.filename)) {
+    addLaunchRevisionFile(files, module.filename);
+  }
+  for (const child of module.children || []) {
+    collectCachedModuleFiles(files, child, appDir, workspaceDir, visited);
+  }
 }
 
 function collectLaunchRevisionFiles(files, root) {
@@ -406,7 +537,7 @@ function loadAppConfig(appPathInput) {
   };
 
   assertUnique(app.domains.map((domain) => domain.id), 'domain id');
-  app.launchRevision = createLaunchRevision(appPath, appDir, workspaceDir, domainRefs, clientExtensions);
+  app.launchRevision = createLaunchRevision(appPath, appDir, workspaceDir, domainRefs, clientExtensions, extensionEntries);
   return app;
 }
 
@@ -1341,11 +1472,12 @@ function normalizeSourceFileEntry(entry, index = 0) {
 
 function normalizeSourceReadResult(result, rawName) {
   const source = result && typeof result === 'object' && !Array.isArray(result) ? result : null;
+  let normalized;
   if (source && (Object.prototype.hasOwnProperty.call(source, 'data') || Object.prototype.hasOwnProperty.call(source, 'content'))) {
     const type = source.type || (Object.prototype.hasOwnProperty.call(source, 'data') ? 'json' : 'text');
     const data = Object.prototype.hasOwnProperty.call(source, 'data') ? source.data : undefined;
     const content = source.content ?? (type === 'json' ? JSON.stringify(data, null, 2) : '');
-    return {
+    normalized = {
       name: source.name || rawName,
       path: source.path || '',
       type,
@@ -1354,17 +1486,21 @@ function normalizeSourceReadResult(result, rawName) {
       ...(data !== undefined ? { data } : {}),
       content
     };
+  } else if (typeof result === 'string') {
+    normalized = { name: rawName, path: '', type: 'text', content: result };
+  } else {
+    normalized = {
+      name: rawName,
+      path: '',
+      type: 'json',
+      data: result,
+      content: JSON.stringify(result, null, 2)
+    };
   }
-  if (typeof result === 'string') {
-    return { name: rawName, path: '', type: 'text', content: result };
+  if (normalized.revision === undefined) {
+    normalized.revision = resourceRevision(normalized);
   }
-  return {
-    name: rawName,
-    path: '',
-    type: 'json',
-    data: result,
-    content: JSON.stringify(result, null, 2)
-  };
+  return normalized;
 }
 
 async function listSourceProviderFiles(app, domain, provider, sessionId = 'default') {
@@ -1390,12 +1526,29 @@ async function writeSourceProviderFile(app, domain, provider, rawName, payload, 
   if (!write) {
     throw Object.assign(new Error(`Source provider "${sourceProviderName(app, domain)}" does not implement write().`), { status: 501 });
   }
+  if (payload?.revision !== undefined) {
+    const current = await readSourceProviderFile(app, domain, provider, rawName, sessionId);
+    assertRevision(payload.revision, current.revision, rawName);
+  }
   const result = await write(sourceContext(app, domain, rawName, sessionId), rawName, payload);
+  let revision = result?.revision !== undefined ? String(result.revision) : '';
+  if (!revision) {
+    try {
+      const reopened = await readSourceProviderFile(app, domain, provider, result?.name || rawName, sessionId);
+      revision = reopened.revision;
+    } catch {
+      revision = resourceRevision({
+        type: Object.prototype.hasOwnProperty.call(payload || {}, 'data') ? 'json' : 'text',
+        data: payload?.data,
+        content: payload?.content
+      });
+    }
+  }
   return {
     ok: true,
     name: result?.name || rawName,
     path: result?.path || '',
-    ...(result?.revision !== undefined ? { revision: String(result.revision) } : {}),
+    revision,
     ...(result?.meta !== undefined ? { meta: result.meta } : {})
   };
 }
@@ -1530,7 +1683,8 @@ function readDomainFile(app, domain, rawName, sessionId = 'default') {
       path: '',
       type: 'json',
       data,
-      content: JSON.stringify(data, null, 2)
+      content: JSON.stringify(data, null, 2),
+      revision: multiJsonRevision(app, domain)
     };
   }
 
@@ -1545,10 +1699,23 @@ function readDomainFile(app, domain, rawName, sessionId = 'default') {
   const text = stripBom(fs.readFileSync(fullPath, 'utf8'));
   if (isJsonSource(domain)) {
     const data = JSON.parse(text);
-    return { name, path: toPosix(path.relative(app.workspaceDir, fullPath)), type: 'json', data, content: JSON.stringify(data, null, 2) };
+    return {
+      name,
+      path: toPosix(path.relative(app.workspaceDir, fullPath)),
+      type: 'json',
+      data,
+      content: JSON.stringify(data, null, 2),
+      revision: fileRevision(fullPath)
+    };
   }
 
-  return { name, path: toPosix(path.relative(app.workspaceDir, fullPath)), type: 'text', content: text };
+  return {
+    name,
+    path: toPosix(path.relative(app.workspaceDir, fullPath)),
+    type: 'text',
+    content: text,
+    revision: fileRevision(fullPath)
+  };
 }
 
 function writeDomainFile(app, domain, rawName, payload, sessionId = 'default') {
@@ -1558,6 +1725,7 @@ function writeDomainFile(app, domain, rawName, payload, sessionId = 'default') {
   }
 
   if (domain.source?.type === 'multi-json') {
+    assertRevision(payload?.revision, multiJsonRevision(app, domain), rawName);
     const data = payload && Object.prototype.hasOwnProperty.call(payload, 'data')
       ? payload.data
       : JSON.parse(String(payload?.content || '{}'));
@@ -1565,11 +1733,15 @@ function writeDomainFile(app, domain, rawName, payload, sessionId = 'default') {
     return {
       ok: true,
       name: domain.source.fileName || domain.defaults?.fileName || `${domain.id}.json`,
-      path: ''
+      path: '',
+      revision: multiJsonRevision(app, domain)
     };
   }
 
   const fullPath = filePathForName(app, domain, rawName);
+  if (fs.existsSync(fullPath)) {
+    assertRevision(payload?.revision, fileRevision(fullPath), rawName);
+  }
   if (isJsonSource(domain)) {
     const data = payload && Object.prototype.hasOwnProperty.call(payload, 'data')
       ? payload.data
@@ -1582,7 +1754,8 @@ function writeDomainFile(app, domain, rawName, payload, sessionId = 'default') {
   return {
     ok: true,
     name: isFolderSource(domain) ? safeRelativeName(rawName) : path.basename(fullPath),
-    path: toPosix(path.relative(app.workspaceDir, fullPath))
+    path: toPosix(path.relative(app.workspaceDir, fullPath)),
+    revision: fileRevision(fullPath)
   };
 }
 
@@ -1650,10 +1823,22 @@ function readMultiJsonDomain(app, domain) {
 }
 
 function writeMultiJsonDomain(app, domain, data) {
-  normalizeMultiJsonFiles(domain).forEach((entry) => {
+  const entries = normalizeMultiJsonFiles(domain).map((entry) => {
     const fullPath = resolveUnderWorkspace(app.workspaceDir, entry.path, `domain "${domain.id}" source.files.${entry.key}`);
-    writeJsonFile(fullPath, getByPathServer(data, entry.targetPath) ?? null);
+    return {
+      fullPath,
+      content: `${JSON.stringify(getByPathServer(data, entry.targetPath) ?? null, null, 2)}\n`
+    };
   });
+  writeFilesTransaction(entries);
+}
+
+function multiJsonRevision(app, domain) {
+  const parts = normalizeMultiJsonFiles(domain).map((entry) => {
+    const fullPath = resolveUnderWorkspace(app.workspaceDir, entry.path, `domain "${domain.id}" source.files.${entry.key}`);
+    return `${toPosix(entry.path)}\0${fs.existsSync(fullPath) ? fileRevision(fullPath) : 'missing'}`;
+  });
+  return hashRevision(`fwe-multi-json-v1\0${parts.join('\0')}`);
 }
 
 function getByPathServer(root, pathText) {
