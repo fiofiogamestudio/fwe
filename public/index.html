@@ -14,10 +14,6 @@
         <span id="appTitle" class="toolbar__title">fwe</span>
         <span id="statusText" class="toolbar__status" role="status" aria-live="polite">加载中</span>
       </div>
-      <div class="toolbar__group resource-bar__selectors">
-        <select id="domainSelect" title="数据域"></select>
-        <select id="fileSelect" title="文件"></select>
-      </div>
       <div class="toolbar__group resource-bar__actions">
         <button id="saveButton" type="button">保存</button>
         <button id="undoButton" type="button">撤销</button>
@@ -31,6 +27,43 @@
         </div>
       </div>
     </header>
+
+    <section id="resourceContextBar" class="resource-context-bar">
+      <div class="resource-bar__selectors">
+        <div id="managedNavigation" class="managed-navigation hidden">
+          <label class="resource-selector-field">
+            <span id="workspaceSelectLabel">工作区</span>
+            <select id="workspaceSelect" title="工作区"></select>
+          </label>
+          <label class="resource-selector-field">
+            <span id="sectionSelectLabel">内容</span>
+            <select id="sectionSelect" title="内容"></select>
+          </label>
+        </div>
+        <div id="technicalNavigation" class="technical-navigation">
+          <label class="resource-selector-field">
+            <span id="domainSelectLabel">数据域</span>
+            <select id="domainSelect" title="数据域"></select>
+          </label>
+        </div>
+        <label id="fileSelectorField" class="resource-selector-field">
+          <span id="fileSelectLabel">文件</span>
+          <select id="fileSelect" title="文件"></select>
+        </label>
+        <div class="resource-bar__project-context"></div>
+      </div>
+    </section>
+
+    <div class="work-area">
+      <nav id="managedSidebar" class="managed-sidebar hidden" aria-label="内容导航">
+        <div id="managedWorkspaceTabs" class="managed-sidebar__workspaces" role="tablist" aria-label="工作区"></div>
+        <div class="managed-sidebar__section-heading">
+          <strong id="managedSidebarTitle">内容</strong>
+        </div>
+        <div id="managedSectionList" class="managed-sidebar__sections"></div>
+      </nav>
+
+      <div class="work-area__content">
 
     <section id="surfaceHeader" class="surface-header hidden">
       <div class="surface-header__context">
@@ -164,6 +197,8 @@
         </div>
       </aside>
     </main>
+      </div>
+    </div>
   </div>
 
   <div id="graphContextMenu" class="context-menu hidden"></div>

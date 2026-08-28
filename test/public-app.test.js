@@ -189,6 +189,14 @@ test('optional-object fields toggle the whole object and render configured child
   assert.match(inspectorSource, /targetPath: joinPath\(context\.targetPath, field\.path\)/);
 });
 
+test('document form edits honor refresh false without remounting the active control', () => {
+  const editSource = readInspectorFunctionSource('afterInspectorEdit');
+
+  assert.match(editSource, /state\.dirty = true/);
+  assert.match(editSource, /else if \(forceRefresh \|\| field\.refresh\) \{\s*render\(\);/);
+  assert.doesNotMatch(editSource, /\} else \{\s*render\(\);/);
+});
+
 test('dynamic select options support configuration-driven display labels', () => {
   assert.match(inspectorSource, /field\.optionLabels/);
   assert.match(inspectorSource, /mappedLabel \?\? item\.label/);
@@ -240,6 +248,44 @@ function readFunctionSource(name) {
     }
   }
   throw new Error(`Function ${name} is incomplete in app.js.`);
+}
+
+function readInspectorFunctionSource(name) {
+  return readNamedFunctionSource(inspectorSource, name, 'inspector.js');
+}
+
+function readNamedFunctionSource(source, name, fileName) {
+  const candidates = [`function ${name}(`, `async function ${name}(`];
+  const start = candidates
+    .map((candidate) => source.indexOf(candidate))
+    .filter((index) => index >= 0)
+    .sort((left, right) => left - right)[0];
+  assert.notEqual(start, undefined, `Function ${name} is missing from ${fileName}.`);
+  const header = source.slice(start).match(/\)\s*\{/);
+  assert.ok(header, `Function ${name} has no body in ${fileName}.`);
+  const open = start + header.index + header[0].lastIndexOf('{');
+  let depth = 0;
+  let quote = '';
+  let escaped = false;
+  for (let index = open; index < source.length; index += 1) {
+    const char = source[index];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === quote) quote = '';
+      continue;
+    }
+    if (char === "'" || char === '"' || char === '`') {
+      quote = char;
+      continue;
+    }
+    if (char === '{') depth += 1;
+    if (char === '}') {
+      depth -= 1;
+      if (depth === 0) return source.slice(start, index + 1);
+    }
+  }
+  throw new Error(`Function ${name} is incomplete in ${fileName}.`);
 }
 
 function plain(value) {

@@ -57,6 +57,20 @@ The canonical names are `source`, `model`, `view`, `form`, `modes`, `layout`, an
   "title": "fwe Example",
   "workspace": "./workspace",
   "port": 3219,
+  "navigation": {
+    "defaultWorkspace": "authoring",
+    "defaultSection": "items",
+    "workspaces": [
+      {
+        "id": "authoring",
+        "label": "Authoring",
+        "sections": [
+          { "id": "items", "label": "Items", "domain": "items", "collection": "items", "hideFile": true },
+          { "id": "flow", "label": "Flow", "domain": "flow" }
+        ]
+      }
+    ]
+  },
   "domains": [
     "./domains/items.fwe",
     "./domains/flow.fwe"
@@ -241,6 +255,8 @@ Catalog collections can declare reusable multi-select filters. Filters combine w
   ]
 }
 ```
+
+`navigation` is optional. When present, the shell renders a persistent desktop workspace/section sidebar and equivalent narrow-layout selectors instead of the technical domain selector. A section targets one domain and may target one workbench collection; collection targets hide the workbench's duplicate collection tabs. `hideFile` removes an implementation-only singleton file selector while preserving the underlying file resource. Workspace and section IDs must be unique, and every referenced domain and collection is validated during `--check`.
 
 Without `members`, set `itemPath` to the scalar or array field matched against option values. `default` accepts `"all"`, `"none"`, or an explicit value array. When `default` is omitted, options matching any `defaultWhen` field are selected; if none are marked, all options are selected. Filter state is reset when a resource changes, and deep links automatically reveal their target through configured relational filters.
 

@@ -17,6 +17,11 @@ const state = {
     mode: 'overview',
     variant: ''
   },
+  appNavigation: {
+    workspaceId: '',
+    sectionId: '',
+    sectionByWorkspace: {}
+  },
   view: {
     scale: 1,
     tx: 0,
@@ -43,6 +48,7 @@ const state = {
   dirty: false
 };
 let lastSelectionSignature = '';
+let managedNavigationQueue = Promise.resolve();
 
 const FWE_NAVIGATION_QUERY = Object.freeze({
   domainId: 'fweDomain',
@@ -78,6 +84,8 @@ const DEFAULT_LABELS = {
   preview: '预览',
   references: '引用',
   diagnostics: '诊断',
+  workspace: '工作区',
+  section: '内容',
   domain: '数据域',
   file: '文件',
   metaButton: '元数据',
@@ -263,9 +271,23 @@ fweRuntime.navigation = {
 
 const appTitle = document.querySelector('#appTitle');
 const statusText = document.querySelector('#statusText');
+const appRoot = document.querySelector('.app');
 const workspace = document.querySelector('.workspace');
+const managedNavigation = document.querySelector('#managedNavigation');
+const managedSidebar = document.querySelector('#managedSidebar');
+const managedWorkspaceTabs = document.querySelector('#managedWorkspaceTabs');
+const managedSidebarTitle = document.querySelector('#managedSidebarTitle');
+const managedSectionList = document.querySelector('#managedSectionList');
+const technicalNavigation = document.querySelector('#technicalNavigation');
+const workspaceSelect = document.querySelector('#workspaceSelect');
+const sectionSelect = document.querySelector('#sectionSelect');
+const workspaceSelectLabel = document.querySelector('#workspaceSelectLabel');
+const sectionSelectLabel = document.querySelector('#sectionSelectLabel');
 const domainSelect = document.querySelector('#domainSelect');
+const domainSelectLabel = document.querySelector('#domainSelectLabel');
 const fileSelect = document.querySelector('#fileSelect');
+const fileSelectLabel = document.querySelector('#fileSelectLabel');
+const fileSelectorField = document.querySelector('#fileSelectorField');
 const surfaceHeader = document.querySelector('#surfaceHeader');
 const surfaceTitle = document.querySelector('#surfaceTitle');
 const surfaceSelection = document.querySelector('#surfaceSelection');
@@ -443,6 +465,28 @@ jsonRevertButton.addEventListener('click', () => {
   renderInspector();
   updateActionButtons();
 });
+
+workspaceSelect.addEventListener('change', async () => {
+  const workspaceConfig = getManagedWorkspaces().find((item) => item.id === workspaceSelect.value);
+  if (!workspaceConfig) {
+    syncManagedNavigation();
+    return;
+  }
+  const rememberedSectionId = state.appNavigation.sectionByWorkspace[workspaceConfig.id];
+  const section = workspaceConfig.sections.find((item) => item.id === rememberedSectionId)
+    || workspaceConfig.sections[0];
+  await queueManagedSection(workspaceConfig, section);
+});
+
+sectionSelect.addEventListener('change', async () => {
+  const workspaceConfig = getManagedWorkspaces().find((item) => item.id === workspaceSelect.value);
+  const section = workspaceConfig?.sections.find((item) => item.id === sectionSelect.value);
+  if (!workspaceConfig || !section) {
+    syncManagedNavigation();
+    return;
+  }
+  await queueManagedSection(workspaceConfig, section);
+});
 jsonEditor.addEventListener('input', () => {
   if (state.domain?.kind !== 'text') {
     state.jsonDraft = jsonEditor.value;
@@ -618,10 +662,12 @@ async function init() {
     option.textContent = domain.title;
     domainSelect.append(option);
   }
-  const initialDomain = state.app.domains.find((domain) => domain.id === initialNavigationTarget.domainId)
+  const managedTarget = configureManagedNavigation(initialNavigationTarget);
+  const initialTarget = managedTarget || initialNavigationTarget;
+  const initialDomain = state.app.domains.find((domain) => domain.id === initialTarget.domainId)
     || state.app.domains[0];
   if (initialDomain) {
-    await selectDomain(initialDomain, { navigation: initialNavigationTarget });
+    await selectDomain(initialDomain, { navigation: initialTarget });
   }
 }
 
@@ -644,6 +690,14 @@ function applyAppLabels() {
   collectionSearch.placeholder = getAppLabel('search');
   collectionDetailButton.textContent = getAppLabel('detail');
   collectionGridButton.textContent = getAppLabel('grid');
+  workspaceSelectLabel.textContent = getAppLabel('workspace');
+  sectionSelectLabel.textContent = getAppLabel('section');
+  domainSelectLabel.textContent = getAppLabel('domain');
+  fileSelectLabel.textContent = getAppLabel('file');
+  workspaceSelect.title = getAppLabel('workspace');
+  workspaceSelect.setAttribute('aria-label', getAppLabel('workspace'));
+  sectionSelect.title = getAppLabel('section');
+  sectionSelect.setAttribute('aria-label', getAppLabel('section'));
   domainSelect.title = getAppLabel('domain');
   domainSelect.setAttribute('aria-label', getAppLabel('domain'));
   fileSelect.title = getAppLabel('file');
@@ -663,6 +717,213 @@ function applyAppLabels() {
 
 function getAppLabel(key, fallback = '') {
   return state.app?.labels?.[key] ?? DEFAULT_LABELS[key] ?? fallback ?? key;
+}
+
+function getManagedWorkspaces() {
+  return Array.isArray(state.app?.navigation?.workspaces)
+    ? state.app.navigation.workspaces
+    : [];
+}
+
+function configureManagedNavigation(initialTarget = {}) {
+  const workspaces = getManagedWorkspaces();
+  const enabled = workspaces.length > 0;
+  appRoot?.classList.toggle('app--managed', enabled);
+  managedNavigation.classList.toggle('hidden', !enabled);
+  managedSidebar?.classList.toggle('hidden', !enabled);
+  technicalNavigation.classList.toggle('hidden', enabled);
+  if (!enabled) {
+    fileSelectorField.hidden = false;
+    managedWorkspaceTabs?.replaceChildren();
+    managedSectionList?.replaceChildren();
+    return null;
+  }
+
+  workspaceSelect.replaceChildren();
+  workspaces.forEach((workspaceConfig) => {
+    const option = document.createElement('option');
+    option.value = workspaceConfig.id;
+    option.textContent = workspaceConfig.label;
+    workspaceSelect.append(option);
+  });
+
+  const normalizedTarget = normalizeNavigationTarget(initialTarget);
+  const matched = findManagedSection(normalizedTarget);
+  const defaultWorkspaceId = state.app.navigation.defaultWorkspaceId || workspaces[0].id;
+  const workspaceConfig = matched?.workspace
+    || workspaces.find((item) => item.id === defaultWorkspaceId)
+    || workspaces[0];
+  const defaultSectionId = workspaceConfig.id === defaultWorkspaceId
+    ? state.app.navigation.defaultSectionId
+    : '';
+  const section = matched?.section
+    || workspaceConfig.sections.find((item) => item.id === defaultSectionId)
+    || workspaceConfig.sections[0];
+
+  setManagedNavigationSelection(workspaceConfig, section);
+  return matched
+    ? { ...managedSectionTarget(section), ...normalizedTarget }
+    : managedSectionTarget(section);
+}
+
+function findManagedSection(target = currentNavigationTarget()) {
+  const navigation = normalizeNavigationTarget(target);
+  if (!navigation.domainId) return null;
+  const candidates = getManagedWorkspaces().flatMap((workspaceConfig) => (
+    workspaceConfig.sections.map((section) => ({ workspace: workspaceConfig, section }))
+  ));
+  if (navigation.collectionId) {
+    const exact = candidates.find(({ section }) => (
+      section.domainId === navigation.domainId && section.collectionId === navigation.collectionId
+    ));
+    if (exact) return exact;
+  }
+  return candidates.find(({ section }) => (
+    section.domainId === navigation.domainId && !section.collectionId
+  )) || candidates.find(({ section }) => section.domainId === navigation.domainId) || null;
+}
+
+function managedSectionTarget(section) {
+  return normalizeNavigationTarget({
+    domainId: section?.domainId,
+    collectionId: section?.collectionId
+  });
+}
+
+function setManagedNavigationSelection(workspaceConfig, section) {
+  if (!workspaceConfig || !section) return;
+  state.appNavigation.workspaceId = workspaceConfig.id;
+  state.appNavigation.sectionId = section.id;
+  state.appNavigation.sectionByWorkspace[workspaceConfig.id] = section.id;
+  workspaceSelect.value = workspaceConfig.id;
+  renderManagedSectionOptions(workspaceConfig);
+  sectionSelect.value = section.id;
+  fileSelectorField.hidden = section.hideFile === true;
+  renderManagedSidebar(workspaceConfig, section);
+}
+
+function renderManagedSidebar(workspaceConfig, activeSection) {
+  if (!managedSidebar || !managedWorkspaceTabs || !managedSectionList || !workspaceConfig || !activeSection) return;
+  managedSidebarTitle.textContent = getAppLabel('section');
+  managedWorkspaceTabs.replaceChildren();
+  getManagedWorkspaces().forEach((item) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = item.label;
+    button.dataset.workspaceId = item.id;
+    button.className = item.id === workspaceConfig.id ? 'is-active' : '';
+    button.setAttribute('role', 'tab');
+    button.setAttribute('aria-selected', String(item.id === workspaceConfig.id));
+    button.addEventListener('click', () => {
+      if (item.id === workspaceConfig.id) return;
+      const rememberedId = state.appNavigation.sectionByWorkspace[item.id];
+      const nextSection = item.sections.find((section) => section.id === rememberedId)
+        || item.sections[0];
+      if (nextSection) queueManagedSection(item, nextSection);
+    });
+    managedWorkspaceTabs.append(button);
+  });
+
+  managedSectionList.replaceChildren();
+  const groupCounts = workspaceConfig.sections.reduce((counts, section) => {
+    if (section.group) counts.set(section.group, (counts.get(section.group) || 0) + 1);
+    return counts;
+  }, new Map());
+  let currentGroup = null;
+  workspaceConfig.sections.forEach((section) => {
+    const group = section.group || '';
+    if (group && group !== currentGroup && groupCounts.get(group) > 1) {
+      const heading = document.createElement('div');
+      heading.className = 'managed-sidebar__group-label';
+      heading.textContent = group;
+      managedSectionList.append(heading);
+    }
+    currentGroup = group;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = section.label;
+    button.dataset.sectionId = section.id;
+    button.className = section.id === activeSection.id ? 'is-active' : '';
+    if (section.id === activeSection.id) button.setAttribute('aria-current', 'page');
+    button.addEventListener('click', () => {
+      if (section.id !== activeSection.id) queueManagedSection(workspaceConfig, section);
+    });
+    managedSectionList.append(button);
+  });
+}
+
+function setManagedNavigationBusy(busy) {
+  managedSidebar?.setAttribute('aria-busy', String(busy));
+  managedSidebar?.querySelectorAll('button').forEach((button) => {
+    button.disabled = busy;
+  });
+}
+
+function renderManagedSectionOptions(workspaceConfig) {
+  sectionSelect.replaceChildren();
+  const groupElements = new Map();
+  workspaceConfig.sections.forEach((section) => {
+    const option = document.createElement('option');
+    option.value = section.id;
+    option.textContent = section.label;
+    if (!section.group) {
+      sectionSelect.append(option);
+      return;
+    }
+    let group = groupElements.get(section.group);
+    if (!group) {
+      group = document.createElement('optgroup');
+      group.label = section.group;
+      groupElements.set(section.group, group);
+      sectionSelect.append(group);
+    }
+    group.append(option);
+  });
+}
+
+async function activateManagedSection(workspaceConfig, section) {
+  workspaceSelect.disabled = true;
+  sectionSelect.disabled = true;
+  setManagedNavigationBusy(true);
+  try {
+    const activated = await navigateToResource(managedSectionTarget(section), { updateUrl: true });
+    if (!activated) {
+      syncManagedNavigation();
+      return false;
+    }
+    setManagedNavigationSelection(workspaceConfig, section);
+    setStatus(`${getAppLabel('opened')} ${getResourceDisplayName()}`);
+    return true;
+  } finally {
+    workspaceSelect.disabled = false;
+    sectionSelect.disabled = false;
+    setManagedNavigationBusy(false);
+  }
+}
+
+function queueManagedSection(workspaceConfig, section) {
+  const next = managedNavigationQueue
+    .catch(() => {})
+    .then(() => activateManagedSection(workspaceConfig, section));
+  managedNavigationQueue = next;
+  return next;
+}
+
+function syncManagedNavigation() {
+  if (getManagedWorkspaces().length === 0) return;
+  const matched = findManagedSection();
+  if (matched) setManagedNavigationSelection(matched.workspace, matched.section);
+}
+
+function isCollectionNavigationManaged(collectionId) {
+  if (!collectionId || getManagedWorkspaces().length === 0) return false;
+  const matched = findManagedSection({ domainId: state.domain?.id, collectionId });
+  return matched?.section?.collectionId === collectionId;
+}
+
+function getResourceDisplayName(fileName = state.file?.name || '') {
+  const matched = findManagedSection();
+  return matched?.section?.hideFile ? matched.section.label : fileName;
 }
 
 function formatAppLabel(key, fallback, values = {}) {
@@ -863,7 +1124,7 @@ async function openSelectedFile(options = {}) {
   state.dirty = false;
   clearServerDiagnostics();
   resetHistory();
-  setStatus(`${getAppLabel('opened')} ${state.file.name}`);
+  setStatus(`${getAppLabel('opened')} ${getResourceDisplayName(state.file.name)}`);
   render();
   dispatchResourceEvent('fwe:resource-opened');
 }
@@ -964,7 +1225,7 @@ async function saveFile(options = {}) {
   }
   state.dirty = false;
   clearServerDiagnostics();
-  setStatus(`${getAppLabel('saved')} ${savingFile.name}`);
+  setStatus(`${getAppLabel('saved')} ${getResourceDisplayName(savingFile.name)}`);
   await loadFiles();
   const listedFile = state.files.find((file) => file.name === savingFile.name);
   state.file = {
@@ -1103,7 +1364,11 @@ async function navigateToResource(target = {}, options = {}) {
   }
   if (domain.id !== state.domain?.id) {
     await selectDomain(domain, { navigation });
-    return navigationMatchesCurrentSelection(navigation);
+    const matched = navigationMatchesCurrentSelection(navigation);
+    if (matched && options.updateUrl === true) {
+      window.history.pushState(null, '', buildNavigationHref(currentNavigationTarget()));
+    }
+    return matched;
   }
 
   if (navigation.fileName && navigation.fileName !== state.file?.name) {
@@ -1118,7 +1383,20 @@ async function navigateToResource(target = {}, options = {}) {
     state.file = file;
     fileSelect.value = file.name;
     await openSelectedFile({ skipDirtyCheck: true, navigation });
-    return navigationMatchesCurrentSelection(navigation);
+    const matched = navigationMatchesCurrentSelection(navigation);
+    if (matched && options.updateUrl === true) {
+      window.history.pushState(null, '', buildNavigationHref(currentNavigationTarget()));
+    }
+    return matched;
+  }
+
+  if (!navigation.collectionId) {
+    if (options.updateUrl === true) {
+      window.history.pushState(null, '', buildNavigationHref(currentNavigationTarget()));
+    }
+    resetJsonDraftState();
+    render();
+    return true;
   }
 
   const applied = applyWorkbenchNavigationTarget(navigation);
@@ -1126,7 +1404,7 @@ async function navigateToResource(target = {}, options = {}) {
     return false;
   }
   if (options.updateUrl === true) {
-    window.history.pushState(null, '', buildNavigationHref(navigation));
+    window.history.pushState(null, '', buildNavigationHref(currentNavigationTarget()));
   }
   resetJsonDraftState();
   render();
@@ -1150,6 +1428,17 @@ function applyWorkbenchNavigationTarget(target = {}) {
     return false;
   }
   const rows = getCollectionRows(collection);
+  if (rows.length === 0 && !navigation.itemId) {
+    state.workbench.collectionId = collection.id;
+    state.selectedKey = '';
+    state.selectedEdge = null;
+    const emptyModes = getCollectionModes(collection);
+    state.workbench.mode = emptyModes.some((mode) => mode.id === navigation.mode)
+      ? navigation.mode
+      : getCollectionDefaultMode(collection);
+    state.workbench.variant = '';
+    return true;
+  }
   const index = navigation.itemId
     ? rows.findIndex((item, rowIndex) => String(getCollectionItemId(collection, item, rowIndex)) === navigation.itemId)
     : (rows.length > 0 ? 0 : -1);
@@ -1343,7 +1632,7 @@ function restoreHistorySnapshot(snapshot, label) {
   state.inspectorMode = snapshot.inspectorMode || 'form';
   resetJsonDraftState();
   state.dirty = true;
-  setStatus(`${label}: ${snapshot.label || state.file?.name || ''}`);
+  setStatus(`${label}: ${snapshot.label || getResourceDisplayName()}`);
   render();
   updateActionButtons();
 }
@@ -1426,7 +1715,8 @@ function updateSurfaceHeader() {
   if (hidden) {
     closeCommandMenu(surfaceMenu, surfaceMoreButton);
   }
-  surfaceTitle.textContent = state.domain?.title || getAppLabel('editor');
+  const managedSection = findManagedSection()?.section;
+  surfaceTitle.textContent = managedSection?.label || state.domain?.title || getAppLabel('editor');
   surfaceSelection.textContent = getSurfaceSelectionText();
 }
 
@@ -1437,8 +1727,17 @@ function getSurfaceSelectionText() {
   if (state.selectedEdge) {
     return getGraphLabel('edgeKind', '连线');
   }
+  const managedSection = findManagedSection()?.section;
+  if (managedSection?.collectionId && isCollectionWorkbench()) {
+    const collection = getActiveWorkbenchCollection();
+    const selected = collection ? findSelectedCollectionItem(collection) : null;
+    return selected ? getCollectionItemTitle(collection, selected.item, selected.index) : '';
+  }
   if (state.selectedKey) {
     return formatSurfaceSelectionKey(state.selectedKey);
+  }
+  if (managedSection?.hideFile) {
+    return '';
   }
   return state.file.name || '';
 }
@@ -2453,6 +2752,7 @@ function addViewContextCompatibilityAliases(context, viewSpec) {
 }
 
 function render() {
+  syncManagedNavigation();
   hideAllViews();
   const resolved = resolveDomainView(state.domain);
   const ctx = createViewContext(resolved.spec);
@@ -2922,6 +3222,9 @@ function getCollectionDefaultMode(collection) {
 }
 
 function renderCollectionWorkbench() {
+  [...collectionWorkbench.children].forEach((child) => {
+    if (!child.matches('.collection-browser, .collection-editor')) child.remove();
+  });
   const collection = getActiveWorkbenchCollection();
   if (!collection) {
     collectionEditorBody.innerHTML = `<div class="empty">${escapeHtml(getAppLabel('noCollections'))}</div>`;
@@ -2947,6 +3250,7 @@ function refreshCollectionFilterResults(collection) {
 }
 
 function renderCollectionTabs(activeCollection) {
+  collectionTabs.hidden = isCollectionNavigationManaged(activeCollection?.id);
   const collections = getWorkbenchCollections();
   const groups = getWorkbenchCollectionGroups(collections);
   const activeGroup = groups.find((group) => group.collections.some((collection) => collection.id === activeCollection.id)) || null;

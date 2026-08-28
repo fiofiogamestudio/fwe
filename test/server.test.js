@@ -55,6 +55,58 @@ test('an older same-id server without a launch revision is rejected', () => {
   );
 });
 
+test('app navigation validates workspace sections against domain collections', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fwe-navigation-test-'));
+  fs.mkdirSync(path.join(root, 'workspace'), { recursive: true });
+  writeJson(path.join(root, 'workspace', 'content.json'), { items: [] });
+  writeJson(path.join(root, 'content.fwe.json'), {
+    id: 'content',
+    kind: 'document',
+    title: 'Content',
+    source: { type: 'single-json', path: 'content.json' },
+    model: { type: 'object' },
+    workbench: { collections: [{ id: 'items', path: 'items' }] }
+  });
+  writeJson(path.join(root, 'app.fwe.json'), {
+    id: 'navigation-test',
+    workspace: './workspace',
+    domains: ['./content.fwe.json'],
+    navigation: {
+      defaultWorkspace: 'authoring',
+      defaultSection: 'items',
+      workspaces: [{
+        id: 'authoring',
+        label: 'Authoring',
+        sections: [{ id: 'items', label: 'Items', domain: 'content', collection: 'items', hideFile: true }]
+      }]
+    }
+  });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const app = loadAppConfig(path.join(root, 'app.fwe.json'));
+  assert.deepEqual(app.navigation, {
+    defaultWorkspaceId: 'authoring',
+    defaultSectionId: 'items',
+    workspaces: [{
+      id: 'authoring',
+      label: 'Authoring',
+      sections: [{
+        id: 'items',
+        label: 'Items',
+        group: '',
+        domainId: 'content',
+        collectionId: 'items',
+        hideFile: true
+      }]
+    }]
+  });
+
+  const invalid = readJson(path.join(root, 'app.fwe.json'));
+  invalid.navigation.workspaces[0].sections[0].collection = 'missing';
+  writeJson(path.join(root, 'app.fwe.json'), invalid);
+  assert.throws(() => loadAppConfig(path.join(root, 'app.fwe.json')), /unknown collection: content\/missing/);
+});
+
 test('built-in folder-json source lists, reads, and writes inside its workspace', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fwe-server-test-'));
   const workspace = path.join(root, 'workspace');

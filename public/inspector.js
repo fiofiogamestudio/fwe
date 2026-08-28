@@ -1306,7 +1306,7 @@ function afterInspectorEdit(context, field, forceRefresh = false) {
     if (forceRefresh || field.refresh) {
       renderInspector();
     }
-  } else {
+  } else if (forceRefresh || field.refresh) {
     render();
   }
   updateActionButtons();

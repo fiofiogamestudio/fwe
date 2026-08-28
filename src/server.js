@@ -537,8 +537,68 @@ function loadAppConfig(appPathInput) {
   };
 
   assertUnique(app.domains.map((domain) => domain.id), 'domain id');
+  app.navigation = normalizeAppNavigation(raw.navigation, app.domains);
   app.launchRevision = createLaunchRevision(appPath, appDir, workspaceDir, domainRefs, clientExtensions, extensionEntries);
   return app;
+}
+
+function normalizeAppNavigation(value, domains) {
+  if (!isPlainObject(value) || !Array.isArray(value.workspaces) || value.workspaces.length === 0) {
+    return null;
+  }
+
+  const domainById = new Map(domains.map((domain) => [domain.id, domain]));
+  const workspaceIds = new Set();
+  const sectionIds = new Set();
+  const workspaces = value.workspaces.map((workspace, workspaceIndex) => {
+    const id = String(workspace?.id || '').trim();
+    if (!id) throw new Error(`navigation.workspaces[${workspaceIndex}].id is required.`);
+    if (workspaceIds.has(id)) throw new Error(`Duplicate navigation workspace id: ${id}`);
+    workspaceIds.add(id);
+
+    const sections = Array.isArray(workspace.sections) ? workspace.sections : [];
+    if (sections.length === 0) throw new Error(`Navigation workspace "${id}" must include at least one section.`);
+    return {
+      id,
+      label: String(workspace.label || workspace.title || id),
+      sections: sections.map((section, sectionIndex) => {
+        const sectionId = String(section?.id || '').trim();
+        const domainId = String(section?.domainId || section?.domain || '').trim();
+        const collectionId = String(section?.collectionId || section?.collection || '').trim();
+        if (!sectionId) throw new Error(`navigation workspace "${id}" section ${sectionIndex + 1} requires id.`);
+        if (sectionIds.has(sectionId)) throw new Error(`Duplicate navigation section id: ${sectionId}`);
+        sectionIds.add(sectionId);
+        const domain = domainById.get(domainId);
+        if (!domain) throw new Error(`Navigation section "${sectionId}" references unknown domain: ${domainId}`);
+        if (collectionId) {
+          const collections = Array.isArray(domain.workbench?.collections) ? domain.workbench.collections : [];
+          if (!collections.some((collection) => collection.id === collectionId)) {
+            throw new Error(`Navigation section "${sectionId}" references unknown collection: ${domainId}/${collectionId}`);
+          }
+        }
+        return {
+          id: sectionId,
+          label: String(section.label || section.title || sectionId),
+          group: String(section.group || '').trim(),
+          domainId,
+          collectionId,
+          hideFile: section.hideFile === true
+        };
+      })
+    };
+  });
+
+  const defaultWorkspaceId = String(value.defaultWorkspaceId || value.defaultWorkspace || workspaces[0].id).trim();
+  if (!workspaceIds.has(defaultWorkspaceId)) {
+    throw new Error(`navigation.defaultWorkspace references unknown workspace: ${defaultWorkspaceId}`);
+  }
+  const defaultWorkspace = workspaces.find((workspace) => workspace.id === defaultWorkspaceId);
+  const defaultSectionId = String(value.defaultSectionId || value.defaultSection || defaultWorkspace.sections[0].id).trim();
+  if (!defaultWorkspace.sections.some((section) => section.id === defaultSectionId)) {
+    throw new Error(`navigation.defaultSection must belong to workspace "${defaultWorkspaceId}": ${defaultSectionId}`);
+  }
+
+  return { defaultWorkspaceId, defaultSectionId, workspaces };
 }
 
 function loadDomainConfig(ref, appDir, options = {}) {
@@ -1258,6 +1318,7 @@ function publicApp(app) {
     title: app.title,
     launchRevision: app.launchRevision,
     labels: app.labels || {},
+    navigation: app.navigation || null,
     workspace: toPosix(path.relative(app.appDir, app.workspaceDir)) || '.',
     domains: app.domains.map((domain) => ({
       id: domain.id,
