@@ -15,6 +15,7 @@
         <span id="statusText" class="toolbar__status">加载中</span>
       </div>
       <div class="toolbar__group resource-bar__selectors">
+        <select id="groupSelect" title="分类"></select>
         <select id="domainSelect" title="数据域"></select>
         <select id="fileSelect" title="文件"></select>
       </div>
@@ -120,6 +121,7 @@
 
       <section id="graphView" class="graph-panel hidden">
         <div id="graphViewport" class="graph-viewport">
+          <aside id="graphGuide" class="graph-guide hidden"></aside>
           <div id="graphStage" class="graph-stage">
             <svg id="graphEdges" class="graph-edges"></svg>
             <div id="graphNodes" class="graph-nodes"></div>

@@ -118,6 +118,18 @@
     },
     render(ctx) {
       ctx.showView('collection');
+      ctx.hosts.collectionWorkbench.dataset.layout = 'catalog';
+      ctx.renderCollectionWorkbench();
+    }
+  });
+
+  window.fwe.registerWorkbenchLayout('dense', {
+    noInspector() {
+      return true;
+    },
+    render(ctx) {
+      ctx.showView('collection');
+      ctx.hosts.collectionWorkbench.dataset.layout = 'dense';
       ctx.renderCollectionWorkbench();
     }
   });
@@ -128,6 +140,7 @@
     },
     render(ctx) {
       ctx.showView('sidepanel');
+      ctx.hosts.sidepanelWorkbench.dataset.layout = 'panels';
       ctx.renderSidepanelWorkbench();
     }
   });

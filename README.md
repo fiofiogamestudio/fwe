@@ -23,7 +23,7 @@ node bin/fwe.js --explain flow --app examples/app.fwe.json
 | `src/` | server, source loading, DSL compilation, and extension loading |
 | `public/runtime.js` | browser registry API for views, forms, slots, and workbench layouts |
 | `public/app.js` | app shell, file operations, history, workbench, validation, and shared helpers |
-| `public/graph.js` | fixed graph, free graph, route-lane layout, and blueprint rendering |
+| `public/graph.js` | fixed graph, free graph, route-lane/tree layout, and blueprint rendering |
 | `public/inspector.js` | inspector form rendering and JSON mode |
 | `public/views/` | small built-in view registrations |
 | `templates/` | built-in model and domain templates |
@@ -69,6 +69,7 @@ Run directly:
 ```powershell
 start.bat
 node bin/fwe.js --app examples/app.fwe.json
+node bin/fwe.js --replace --app examples/app.fwe.json
 node bin/fwe.js --check --app examples/app.fwe.json
 node bin/fwe.js --explain flow --app examples/app.fwe.json
 ```
@@ -80,6 +81,7 @@ New domains should use `.fwe` files.
 ```text
 id items
 title "Items"
+group "Gameplay"
 source "folder-json:items"
 
 data Root {
@@ -100,6 +102,7 @@ view table items {
 
 DSL layers:
 
+- `group "Name"` places the domain under the first-level app navigation group; the toolbar is `group -> domain -> file`.
 - `source "type:path"` binds the file source.
 - `data Root { ... }` defines the root model.
 - `type Name { ... }` defines reusable object models.
@@ -124,7 +127,9 @@ Built-in view modules live in `public/views/*.js`.
 - `table`: keyed array table.
 - `graph-fixed`: route-lane graph, no saved coordinates.
 - `graph-free`: integer-grid movable graph.
+- `graph-blueprint` with `layout tree`: measured, deterministic top-to-bottom tree layout; saved coordinates are ignored.
 - `workbench`: composite multi-collection editor. `layout catalog` is a catalog browser; `layout panels` is a three-panel workspace.
+- `workbench` with `layout dense`: compact two-panel collection editing with multi-column forms.
 - `text`: direct text editor.
 
 Fixed graph:
@@ -162,6 +167,12 @@ view graph nodes {
 ```
 
 Free graph positions are stored as integers. With `grid 10`, `{ "x": 12, "y": 8 }` renders at `120px, 80px`.
+
+Tree blueprints use `layout tree`. Control edges define parent-child relationships, sibling order comes from `values.order`, and branch output ports must opt into multiple connections explicitly. `profile behavior-tree` enables the strict behavior-tree presentation; node `category` values such as `root`, `composite`, `decorator`, `condition`, and `action` control semantic styling without entering saved data. A node type may declare `description "..."`; the behavior-tree card then explains the stable meaning of that type. A blueprint may also declare `note note`, where the first `note` enables instance notes and the second is the saved node field path. Instance notes remain outside `values`, so runtimes that only consume blueprint values can ignore authoring comments cleanly. Left-click selects a node for property editing. Right-click opens structural commands for adding a compatible child, moving sibling priority, duplicating a subtree, or deleting a subtree; right-drag pans the canvas. Strict tree profiles intentionally do not expose arbitrary cable drawing because the editor preserves one root, one parent per non-root node, and port cardinality while each command is applied.
+
+State-machine domains can use `profile state-machine`. The renderer keeps authored states as compact nodes, transitions as labeled edges, the initial marker separate, and cycle edges on dedicated return lanes. Forward, return, and self-loop routes use distinct visual styles without changing saved data. Left-click a state to edit its properties, or click a transition line/label to edit the referenced repeater item directly. Right-click a state to change the initial state, add a transition, or delete the state; right-click a transition to edit or delete it. Profile metadata only changes presentation; runtime semantics remain in the edited JSON.
+
+For built-in JSON sources, a root-level optional string `alias` is displayed after the file name as `file.json（alias）`. The file path and authored IDs remain stable, so aliases can be changed without breaking references.
 
 ## Workbench
 
@@ -343,6 +354,8 @@ npm run pack:dry
 ```
 
 `npm test` runs syntax, example compilation, and unit tests on Node.js 18 or newer. `test:browser` additionally requires Node.js 22 or newer and a local Chrome or Chromium installation; it checks every example domain for browser errors, layout overflow, and graph add/undo behavior.
+
+For a focused custom-form probe, `browser-smoke.js` accepts `--domain`, `--file`, `--collection`, `--item`, and `--expect-selector`. Pair `--mutation-button` with `--mutation-selector` to verify that a visible button increases the selected node count and Undo restores it.
 
 ## Form Extensions
 

@@ -332,6 +332,20 @@ function inferWorkbenchCollectionFromPath(pathText) {
 }
 
 function buildEdgeInspectorContext(edge) {
+  if (isStateMachineProfile() && edge?.dataPath) {
+    const graph = buildGraphModel();
+    const currentEdge = graph.edges.find((candidate) => candidate.dataPath === edge.dataPath) || edge;
+    state.selectedEdge = currentEdge;
+    return {
+      kind: 'state-transition',
+      title: `转换：${getStateMachineNodeLabel(currentEdge.sourceNode)} → ${getStateMachineNodeLabel(currentEdge.targetNode)}`,
+      target: currentEdge.sourceValue,
+      targetPath: currentEdge.dataPath,
+      value: currentEdge.sourceValue,
+      edge: currentEdge,
+      graph
+    };
+  }
   return {
     kind: 'edge',
     title: `${edge.from} -> ${edge.to}`,
@@ -353,6 +367,9 @@ function getGraphNodeDataPath(node) {
 
 function resolveInspectorForm(context) {
   const forms = state.domain.inspector?.forms || {};
+  if (context.kind === 'state-transition') {
+    return buildStateTransitionInspectorForm(context, forms);
+  }
   if (context.kind === 'graph-node' && isBlueprintGraph()) {
     return buildBlueprintNodeInspectorForm(context);
   }
@@ -371,6 +388,43 @@ function resolveInspectorForm(context) {
     }
   }
   return forms[context.kind] || forms.default;
+}
+
+function buildStateTransitionInspectorForm(context, forms) {
+  const rootField = parsePathParts(context.edge?.field || '')[0] || 'transitions';
+  const repeater = (forms.graphNode?.groups || [])
+    .flatMap((group) => group.fields || [])
+    .find((field) => field.type === 'repeater' && field.path === rootField);
+  if (!repeater?.fields?.length) {
+    return null;
+  }
+  const triggerLabels = { tick: '每帧检查', success: '行为成功', failure: '行为失败' };
+  const fields = repeater.fields.map((field) => {
+    const copy = { ...field };
+    if (field.path === 'target') {
+      copy.refresh = true;
+      copy.description = '选择转换终点，连线会立即重新布局。';
+    }
+    if (field.path === 'trigger' && Array.isArray(field.options)) {
+      copy.options = field.options.map((option) => ({
+        ...option,
+        label: triggerLabels[option.value] || option.label || option.value
+      }));
+    }
+    if (field.path === 'condition') {
+      copy.description = '留空表示无需守卫条件；填写条件 ID 后，仅在条件成立时转换。';
+    }
+    if (field.path === 'priority') {
+      copy.description = '同一时机有多条可用转换时，数值更大的优先。';
+    }
+    return copy;
+  });
+  return {
+    groups: [{
+      title: '状态转换',
+      fields
+    }]
+  };
 }
 
 function buildBlueprintNodeInspectorForm(context) {
@@ -395,9 +449,19 @@ function buildBlueprintNodeInspectorForm(context) {
       type: 'select',
       options: typeOptions,
       required: true,
-      refresh: true
+      refresh: true,
+      description: node?.typeSpec?.description || ''
     }
   ];
+  if (spec.note) {
+    fields.push({
+      path: spec.note,
+      label: '节点注释',
+      type: 'textarea',
+      rows: 3,
+      placeholder: '说明这个节点在当前行为树里的具体用途'
+    });
+  }
 
   const valueFields = (node?.typeSpec?.inputs || [])
     .filter((port) => port.kind === 'data' && !isBlueprintInputConnected(node, port.id))

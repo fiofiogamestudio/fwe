@@ -39,7 +39,9 @@ const state = {
     dragBaseline: null
   },
   serverDiagnostics: [],
-  dirty: false
+  dirty: false,
+  selectionVersion: 0,
+  fileOpenVersion: 0
 };
 
 const DEFAULT_LABELS = {
@@ -180,6 +182,7 @@ window.fweRuntime = fweRuntime;
 const appTitle = document.querySelector('#appTitle');
 const statusText = document.querySelector('#statusText');
 const workspace = document.querySelector('.workspace');
+const groupSelect = document.querySelector('#groupSelect');
 const domainSelect = document.querySelector('#domainSelect');
 const fileSelect = document.querySelector('#fileSelect');
 const surfaceHeader = document.querySelector('#surfaceHeader');
@@ -245,6 +248,7 @@ const sidepanelFormModeButton = document.querySelector('#sidepanelFormModeButton
 const sidepanelJsonModeButton = document.querySelector('#sidepanelJsonModeButton');
 const graphView = document.querySelector('#graphView');
 const graphViewport = document.querySelector('#graphViewport');
+const graphGuide = document.querySelector('#graphGuide');
 const graphStage = document.querySelector('#graphStage');
 const graphEdges = document.querySelector('#graphEdges');
 const graphNodes = document.querySelector('#graphNodes');
@@ -255,6 +259,20 @@ const viewScaleText = document.querySelector('#viewScaleText');
 const textView = document.querySelector('#textView');
 const inspectorTitle = document.querySelector('#inspectorTitle');
 const jsonEditor = document.querySelector('#jsonEditor');
+
+groupSelect.addEventListener('change', async () => {
+  const previousGroup = getDomainGroup(state.domain);
+  const domains = getDomainsInGroup(groupSelect.value);
+  if (!domains.length || groupSelect.value === previousGroup) {
+    return;
+  }
+  if (!confirmDiscardChanges()) {
+    groupSelect.value = previousGroup;
+    return;
+  }
+  renderDomainSelect(groupSelect.value);
+  await selectDomain(domains[0]);
+});
 
 domainSelect.addEventListener('change', async () => {
   const domain = state.app.domains.find((item) => item.id === domainSelect.value);
@@ -402,7 +420,7 @@ graphContextMenu.addEventListener('click', (event) => {
   }
   event.preventDefault();
   event.stopPropagation();
-  runGraphContextAction(button.dataset.action, Number(button.dataset.kind));
+  runGraphContextAction(button.dataset.action, { ...button.dataset });
 });
 graphViewport.addEventListener('click', (event) => {
   const target = event.target;
@@ -441,10 +459,16 @@ graphViewport.addEventListener('mousedown', (event) => {
 });
 graphViewport.addEventListener('contextmenu', (event) => {
   const nodeElement = event.target?.closest?.('.graph-node');
-  if (nodeElement && state.domain?.kind === 'graph' && !isBlueprintGraph() && !state.view.pan?.moved) {
+  if (nodeElement && state.domain?.kind === 'graph' && !state.view.pan?.moved) {
     event.preventDefault();
     event.stopPropagation();
     showGraphContextMenu(event.clientX, event.clientY, nodeElement.dataset.key);
+    return;
+  }
+  if (!nodeElement && isBlueprintGraph() && !state.view.pan?.moved) {
+    event.preventDefault();
+    event.stopPropagation();
+    showBlueprintCanvasContextMenu(event.clientX, event.clientY);
     return;
   }
   if (state.view.pan?.moved || !nodeElement) {
@@ -517,14 +541,47 @@ async function init() {
   validateAllDomainForms();
   appTitle.textContent = state.app.title;
   applyAppLabels();
+  renderGroupSelect();
+  const firstDomain = state.app.domains[0];
+  groupSelect.value = getDomainGroup(firstDomain);
+  renderDomainSelect(groupSelect.value);
+  await selectDomain(firstDomain);
+}
+
+function getDomainGroup(domain) {
+  return String(domain?.group || getAppLabel('uncategorized', '其他'));
+}
+
+function getDomainsInGroup(group) {
+  return (state.app?.domains || []).filter((domain) => getDomainGroup(domain) === group);
+}
+
+function renderGroupSelect() {
+  groupSelect.innerHTML = '';
+  const groups = [];
+  for (const domain of state.app?.domains || []) {
+    const group = getDomainGroup(domain);
+    if (!groups.includes(group)) {
+      groups.push(group);
+    }
+  }
+  for (const group of groups) {
+    const option = document.createElement('option');
+    option.value = group;
+    option.textContent = group;
+    groupSelect.append(option);
+  }
+  groupSelect.classList.toggle('hidden', groups.length <= 1);
+}
+
+function renderDomainSelect(group = groupSelect.value) {
   domainSelect.innerHTML = '';
-  for (const domain of state.app.domains) {
+  for (const domain of getDomainsInGroup(group)) {
     const option = document.createElement('option');
     option.value = domain.id;
     option.textContent = domain.title;
     domainSelect.append(option);
   }
-  selectDomain(state.app.domains[0]);
 }
 
 function applyAppLabels() {
@@ -628,7 +685,10 @@ function resetWorkbenchState(domain = state.domain) {
 }
 
 async function selectDomain(domain) {
+  const selectionVersion = ++state.selectionVersion;
+  state.fileOpenVersion += 1;
   state.domain = domain;
+  state.files = [];
   state.file = null;
   state.data = null;
   state.text = '';
@@ -640,9 +700,19 @@ async function selectDomain(domain) {
   state.dirty = false;
   clearServerDiagnostics();
   resetHistory();
+  const group = getDomainGroup(domain);
+  if (groupSelect.value !== group) {
+    groupSelect.value = group;
+    renderDomainSelect(group);
+  }
   domainSelect.value = domain.id;
   renderDomainSummary();
-  await loadFiles();
+  renderFileSelect();
+  setStatus('加载中');
+  const loaded = await loadFiles(domain, selectionVersion);
+  if (!loaded) {
+    return;
+  }
   if (state.file) {
     await openSelectedFile({ skipDirtyCheck: true });
   } else {
@@ -650,21 +720,19 @@ async function selectDomain(domain) {
   }
 }
 
-async function loadFiles() {
-  const result = await api(`/api/domains/${encodeURIComponent(state.domain.id)}/files`);
-  state.files = result.files || [];
-  fileSelect.innerHTML = '';
-  for (const file of state.files) {
-    const option = document.createElement('option');
-    option.value = file.name;
-    option.textContent = file.name;
-    fileSelect.append(option);
+async function loadFiles(domain = state.domain, selectionVersion = state.selectionVersion) {
+  const result = await api(`/api/domains/${encodeURIComponent(domain.id)}/files`);
+  if (selectionVersion !== state.selectionVersion || state.domain?.id !== domain.id) {
+    return false;
   }
+  state.files = result.files || [];
+  renderFileSelect();
   state.file = state.files[0] || null;
   if (state.file) {
     fileSelect.value = state.file.name;
   }
-  setStatus(`${state.domain.title}: ${state.files.length} ${getAppLabel('files')}`);
+  setStatus(`${domain.title}: ${state.files.length} ${getAppLabel('files')}`);
+  return true;
 }
 
 async function openSelectedFile(options = {}) {
@@ -676,10 +744,26 @@ async function openSelectedFile(options = {}) {
     return;
   }
 
-  const result = await api(`/api/domains/${encodeURIComponent(state.domain.id)}/files/${encodeURIComponent(state.file.name)}`);
+  const domain = state.domain;
+  const file = state.file;
+  const selectionVersion = state.selectionVersion;
+  const fileOpenVersion = ++state.fileOpenVersion;
+  const result = await api(`/api/domains/${encodeURIComponent(domain.id)}/files/${encodeURIComponent(file.name)}`);
+  if (
+    selectionVersion !== state.selectionVersion
+    || fileOpenVersion !== state.fileOpenVersion
+    || state.domain?.id !== domain.id
+  ) {
+    return false;
+  }
+  const listedFile = state.files.find((file) => file.name === result.name)
+    || state.files.find((item) => item.name === file.name)
+    || {};
   state.file = {
+    ...listedFile,
     name: result.name,
     path: result.path,
+    ...(result.alias ? { alias: String(result.alias) } : {}),
     ...(result.revision !== undefined ? { revision: String(result.revision) } : {})
   };
   if (result.type === 'text') {
@@ -699,6 +783,7 @@ async function openSelectedFile(options = {}) {
   resetHistory();
   setStatus(`${getAppLabel('opened')} ${state.file.name}`);
   render();
+  return true;
 }
 
 async function createFile() {
@@ -832,9 +917,15 @@ function renderFileSelect() {
   for (const file of state.files) {
     const option = document.createElement('option');
     option.value = file.name;
-    option.textContent = file.exists === false ? `${file.name} *` : file.name;
+    option.textContent = formatFileOption(file);
     fileSelect.append(option);
   }
+}
+
+function formatFileOption(file) {
+  const alias = String(file?.alias || '').trim();
+  const label = alias ? `${file.name}（${alias}）` : file.name;
+  return file.exists === false ? `${label} *` : label;
 }
 
 function resetHistory() {
@@ -1156,6 +1247,9 @@ function canDuplicateSelection() {
 }
 
 function canDeleteSelection() {
+  if (isStateMachineProfile() && !!state.selectedEdge?.dataPath) {
+    return true;
+  }
   const info = getSelectedPathInfo();
   return !!info?.exists && state.domain?.kind !== 'text' && !state.selectedEdge && info.path !== '';
 }
@@ -3172,9 +3266,11 @@ function validateBlueprintGraph(diagnostics) {
     if (!node.typeSpec) {
       diagnostics.push({ path: `${nodePath}.${spec.nodeType}`, message: `未知蓝图节点类型: ${node.typeId}` });
     }
-    const pos = getByPath(node.value, spec.position);
-    if (!pos || !isIntegerValue(pos.x) || !isIntegerValue(pos.y)) {
-      diagnostics.push({ path: `${nodePath}.${spec.position}`, message: `蓝图节点坐标必须是整数: #${node.id}` });
+    if (String(state.domain?.graph?.layout || '').toLowerCase() === 'free') {
+      const pos = getByPath(node.value, spec.position);
+      if (!pos || !isIntegerValue(pos.x) || !isIntegerValue(pos.y)) {
+        diagnostics.push({ path: `${nodePath}.${spec.position}`, message: `蓝图节点坐标必须是整数: #${node.id}` });
+      }
     }
   });
 
@@ -3260,6 +3356,9 @@ function validateObjectRule(rule, diagnostics) {
   }
   const normalizedKind = kind.toLowerCase();
   const matches = collectPathValues(state.data, rule.path || '');
+  if (!matches.length && /\[\]|(?:^|\.)\*(?:\.|$)/.test(String(rule.path || ''))) {
+    return;
+  }
   const targets = matches.length ? matches : [{ path: rule.path || '', value: getByPath(state.data, rule.path || '') }];
   targets.forEach((target) => {
     const value = target.value;

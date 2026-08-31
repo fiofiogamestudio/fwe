@@ -17,12 +17,24 @@ function getGraphProfileConfig() {
   };
 }
 
+function getGraphProfileId() {
+  return String(state.domain?.graph?.profile || state.domain?.graph?.adapter || '').trim().toLowerCase();
+}
+
+function isStateMachineProfile() {
+  return getGraphProfileId() === 'state-machine';
+}
+
 function getGraphKindLabels() {
   return state.domain?.graph?.kindLabels || getGraphProfileConfig().kindLabels || {};
 }
 
 function showGraphContextMenu(x, y, nodeKey) {
   if (!nodeKey) {
+    return;
+  }
+  if (isBlueprintGraph()) {
+    showBlueprintGraphContextMenu(x, y, nodeKey);
     return;
   }
   const graph = buildGraphModel();
@@ -37,22 +49,95 @@ function showGraphContextMenu(x, y, nodeKey) {
   resetJsonDraftState();
   const rendered = isDialogGraphProfile()
     ? renderDialogGraphContextMenu(node, graph)
-    : renderGenericGraphContextMenu(node, graph);
+    : isStateMachineProfile()
+      ? renderStateMachineGraphContextMenu(node, graph)
+      : renderGenericGraphContextMenu(node, graph);
   if (!rendered) {
     hideGraphContextMenu();
     return;
   }
   renderInspector();
   renderGraph();
+  openGraphContextMenu(x, y);
+  updateActionButtons();
+}
+
+function openGraphContextMenu(x, y) {
   graphContextMenu.classList.remove('hidden');
   graphContextMenu.style.left = `${x + 6}px`;
   graphContextMenu.style.top = `${y + 6}px`;
-  updateActionButtons();
+  const rect = graphContextMenu.getBoundingClientRect();
+  graphContextMenu.style.left = `${Math.max(8, Math.min(x + 6, window.innerWidth - rect.width - 8))}px`;
+  graphContextMenu.style.top = `${Math.max(8, Math.min(y + 6, window.innerHeight - rect.height - 8))}px`;
 }
 
 function hideGraphContextMenu() {
   graphContextMenu.classList.add('hidden');
   state.contextGraphNodeKey = '';
+  state.contextGraphEdgePath = '';
+}
+
+function appendGraphContextMenuGroup(title, actions) {
+  if (!actions.length) {
+    return;
+  }
+  const group = document.createElement('div');
+  group.className = 'context-menu__group';
+  const heading = document.createElement('div');
+  heading.className = 'context-menu__title';
+  heading.textContent = title;
+  group.append(heading);
+  actions.forEach((action) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.action = action.action;
+    Object.entries(action.data || {}).forEach(([key, value]) => {
+      button.dataset[key] = String(value);
+    });
+    button.textContent = action.label;
+    if (action.danger) {
+      button.className = 'danger';
+    }
+    group.append(button);
+  });
+  graphContextMenu.append(group);
+}
+
+function renderStateMachineGraphContextMenu(node, graph) {
+  graphContextMenu.innerHTML = '';
+  appendGraphContextMenuGroup('状态', [
+    { action: 'state-edit', label: '编辑状态' },
+    ...(graph.entry === node.key ? [] : [{ action: 'state-set-initial', label: '设为初始状态' }])
+  ]);
+  appendGraphContextMenuGroup('新增转换', graph.nodes
+    .filter((candidate) => !isVirtualGraphNode(candidate))
+    .map((candidate) => ({
+      action: 'state-add-transition',
+      label: `转到 ${getStateMachineNodeLabel(candidate)}`,
+      data: { target: candidate.id }
+    })));
+  appendGraphContextMenuGroup('管理', [
+    { action: 'state-delete', label: '删除状态', danger: true }
+  ]);
+  return true;
+}
+
+function getStateMachineNodeLabel(node) {
+  return String(node?.value?.label || node?.value?.name || node?.id || '状态');
+}
+
+function showStateMachineEdgeContextMenu(x, y, edge, edgeKey) {
+  if (!isStateMachineProfile() || !edge?.dataPath) {
+    return;
+  }
+  selectGraphEdge(edge, edgeKey);
+  state.contextGraphEdgePath = edge.dataPath;
+  graphContextMenu.innerHTML = '';
+  appendGraphContextMenuGroup('状态转换', [
+    { action: 'state-edge-edit', label: '编辑转换' },
+    { action: 'state-edge-delete', label: '删除转换', danger: true }
+  ]);
+  openGraphContextMenu(x, y);
 }
 
 function renderDialogGraphContextMenu(node, graph) {
@@ -119,7 +204,169 @@ function renderGenericGraphContextMenu(node, graph) {
   return true;
 }
 
-function runGraphContextAction(action, kind) {
+function showBlueprintGraphContextMenu(x, y, nodeKey) {
+  const graph = buildBlueprintModel();
+  const node = graph.nodeMap.get(nodeKey);
+  if (!node) {
+    return;
+  }
+
+  state.contextGraphNodeKey = nodeKey;
+  state.selectedKey = nodeKey;
+  state.selectedEdge = null;
+  resetJsonDraftState();
+  renderBlueprintGraphContextMenu(node, graph);
+  renderInspector();
+  renderGraph();
+  openGraphContextMenu(x, y);
+  updateActionButtons();
+}
+
+function showBlueprintCanvasContextMenu(x, y) {
+  const graph = buildBlueprintModel();
+  if (graph.nodes.length) {
+    return false;
+  }
+  const roots = [...graph.typeMap.values()].filter((type) => type.category === 'root');
+  const types = roots.length ? roots : [...graph.typeMap.values()];
+  if (!types.length) {
+    return false;
+  }
+
+  state.contextGraphNodeKey = '';
+  graphContextMenu.innerHTML = '';
+  appendBlueprintMenuGroup(roots.length ? '创建根节点' : '创建节点', types.map((type) => ({
+    action: 'blueprint-add-root',
+    label: type.title || type.id,
+    nodeType: type.id
+  })));
+  openGraphContextMenu(x, y);
+  return true;
+}
+
+function renderBlueprintGraphContextMenu(node, graph) {
+  graphContextMenu.innerHTML = '';
+  appendBlueprintMenuButton({ action: 'blueprint-edit', label: '编辑节点' });
+
+  const choices = getBlueprintChildChoices(node, graph);
+  const categoryLabels = {
+    root: '根节点',
+    composite: '添加结构节点',
+    decorator: '添加装饰节点',
+    condition: '添加条件节点',
+    action: '添加动作节点'
+  };
+  const categoryOrder = ['composite', 'decorator', 'condition', 'action', 'root', ''];
+  categoryOrder.forEach((category) => {
+    const actions = choices
+      .filter((choice) => (choice.type.category || '') === category)
+      .map((choice) => ({
+        action: 'blueprint-add-child',
+        label: choice.type.title || choice.type.id,
+        nodeType: choice.type.id,
+        fromPort: choice.output.id,
+        toPort: choice.input.id
+      }));
+    appendBlueprintMenuGroup(categoryLabels[category] || '添加子节点', actions);
+  });
+
+  if (canMoveBlueprintBranch(node, graph, -1)) {
+    appendBlueprintMenuButton({ action: 'blueprint-move', label: '优先级上移', direction: '-1' });
+  }
+  if (canMoveBlueprintBranch(node, graph, 1)) {
+    appendBlueprintMenuButton({ action: 'blueprint-move', label: '优先级下移', direction: '1' });
+  }
+  if (canDuplicateBlueprintBranch(node, graph)) {
+    appendBlueprintMenuButton({
+      action: 'blueprint-duplicate',
+      label: getGraphAlgorithm() === 'tree' ? '复制当前分支' : '复制节点'
+    });
+  }
+  appendBlueprintMenuButton({
+    action: 'blueprint-delete',
+    label: node.typeSpec?.category === 'root'
+      ? '清空整棵树'
+      : (getGraphAlgorithm() === 'tree' ? '删除当前分支' : '删除节点'),
+    danger: true
+  });
+}
+
+function appendBlueprintMenuGroup(title, actions) {
+  if (!actions.length) {
+    return;
+  }
+  const group = document.createElement('div');
+  group.className = 'context-menu__group';
+  const heading = document.createElement('div');
+  heading.className = 'context-menu__title';
+  heading.textContent = title;
+  group.append(heading);
+  actions.forEach((action) => appendBlueprintMenuButton(action, group));
+  graphContextMenu.append(group);
+}
+
+function appendBlueprintMenuButton(action, host = graphContextMenu) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.dataset.action = action.action;
+  for (const key of ['nodeType', 'fromPort', 'toPort', 'direction']) {
+    if (action[key] !== undefined) {
+      button.dataset[key] = String(action[key]);
+    }
+  }
+  button.textContent = action.label;
+  if (action.danger) {
+    button.className = 'danger';
+  }
+  host.append(button);
+}
+
+function getBlueprintChildChoices(node, graph) {
+  const tree = getGraphAlgorithm() === 'tree';
+  const outputs = (node.typeSpec?.outputs || []).filter((port) => {
+    if (tree && port.kind !== 'control') {
+      return false;
+    }
+    const used = node.outgoing?.filter((edge) => edge.fromPort === port.id).length || 0;
+    return port.multiple || used === 0;
+  });
+  const choices = [];
+  for (const type of graph.typeMap.values()) {
+    if (tree && type.category === 'root') {
+      continue;
+    }
+    for (const output of outputs) {
+      const input = (type.inputs || []).find((candidate) => (
+        (!tree || candidate.kind === 'control') && blueprintPortsCompatible(output, candidate)
+      ));
+      if (input) {
+        choices.push({ type, output, input });
+        break;
+      }
+    }
+  }
+  const rank = { composite: 0, decorator: 1, condition: 2, action: 3, root: 4 };
+  return choices.sort((left, right) => (
+    (rank[left.type.category] ?? 5) - (rank[right.type.category] ?? 5)
+    || String(left.type.title || left.type.id).localeCompare(String(right.type.title || right.type.id), 'zh-CN')
+  ));
+}
+
+function blueprintPortsCompatible(output, input) {
+  return output.kind === input.kind
+    && (output.type === input.type || output.type === 'any' || input.type === 'any');
+}
+
+function runGraphContextAction(action, options = {}) {
+  if (isBlueprintGraph()) {
+    runBlueprintGraphContextAction(action, options);
+    return;
+  }
+  if (isStateMachineProfile()) {
+    runStateMachineContextAction(action, options);
+    return;
+  }
+  const kind = typeof options === 'object' ? Number(options.kind) : Number(options);
   if (!isDialogGraphProfile()) {
     runGenericGraphContextAction(action);
     return;
@@ -150,6 +397,413 @@ function runGraphContextAction(action, kind) {
   }
 
   hideGraphContextMenu();
+}
+
+function runStateMachineContextAction(action, options = {}) {
+  if (action === 'state-edge-edit') {
+    hideGraphContextMenu();
+    requestAnimationFrame(() => inspectorForm.querySelector('select, textarea, input')?.focus());
+    return;
+  }
+  if (action === 'state-edge-delete') {
+    hideGraphContextMenu();
+    deleteSelection();
+    return;
+  }
+
+  const graph = buildGraphModel();
+  const node = graph.nodeMap.get(state.contextGraphNodeKey || state.selectedKey);
+  if (!node || isVirtualGraphNode(node)) {
+    hideGraphContextMenu();
+    return;
+  }
+  if (action === 'state-edit') {
+    hideGraphContextMenu();
+    requestAnimationFrame(() => inspectorForm.querySelector('select, textarea, input')?.focus());
+    return;
+  }
+  if (action === 'state-set-initial') {
+    setStateMachineInitialNode(node);
+  } else if (action === 'state-add-transition') {
+    addStateMachineTransition(node, options.target, graph);
+  } else if (action === 'state-delete') {
+    deleteGraphSelectionItem();
+  }
+  hideGraphContextMenu();
+}
+
+function setStateMachineInitialNode(node) {
+  const entryPath = state.domain.graph?.entry || 'initial';
+  if (String(getByPath(state.data, entryPath)) === String(node.id)) {
+    return;
+  }
+  pushHistory(`设置初始状态 ${getStateMachineNodeLabel(node)}`);
+  setByPath(state.data, entryPath, node.id);
+  state.selectedKey = node.key;
+  state.selectedEdge = null;
+  markDirtyAndRender(`初始状态：${getStateMachineNodeLabel(node)}`);
+}
+
+function addStateMachineTransition(node, targetId, graph) {
+  const target = graph.nodes.find((candidate) => String(candidate.id) === String(targetId));
+  if (!target) {
+    return false;
+  }
+  const transitions = ensureArray(node.value?.transitions);
+  const transition = {
+    target: target.id,
+    label: `转到${getStateMachineNodeLabel(target)}`,
+    trigger: 'tick',
+    priority: 0
+  };
+  pushHistory(`新增转换 ${getStateMachineNodeLabel(node)} -> ${getStateMachineNodeLabel(target)}`);
+  transitions.push(transition);
+  node.value.transitions = transitions;
+  const nodePath = getGraphNodeDataPath(node);
+  const dataPath = `${nodePath}.transitions[${transitions.length - 1}]`;
+  const nextGraph = buildGraphModel();
+  const edge = nextGraph.edges.find((candidate) => candidate.dataPath === dataPath) || null;
+  state.selectedEdge = edge;
+  state.selectedKey = edge ? getGraphEdgeSelectionKey(edge, nextGraph.edges.indexOf(edge)) : node.key;
+  markDirtyAndRender(`已新增转换到 ${getStateMachineNodeLabel(target)}`);
+  return true;
+}
+
+function runBlueprintGraphContextAction(action, options = {}) {
+  if (action === 'blueprint-add-root') {
+    addBlueprintRoot(options.nodeType);
+    hideGraphContextMenu();
+    return;
+  }
+
+  const graph = buildBlueprintModel();
+  const node = graph.nodeMap.get(state.contextGraphNodeKey || state.selectedKey);
+  if (!node) {
+    hideGraphContextMenu();
+    return;
+  }
+
+  if (action === 'blueprint-edit') {
+    hideGraphContextMenu();
+    requestAnimationFrame(() => inspectorForm.querySelector('select, textarea, input')?.focus());
+    return;
+  }
+  if (action === 'blueprint-add-child') {
+    addBlueprintChild(node, options, graph);
+  } else if (action === 'blueprint-move') {
+    moveBlueprintBranch(node, Number(options.direction), graph);
+  } else if (action === 'blueprint-duplicate') {
+    duplicateBlueprintBranch(node, graph);
+  } else if (action === 'blueprint-delete') {
+    deleteBlueprintBranch(node, graph);
+  }
+  hideGraphContextMenu();
+}
+
+function addBlueprintRoot(typeId) {
+  const graph = buildBlueprintModel();
+  if (graph.nodes.length) {
+    return false;
+  }
+  const type = graph.typeMap.get(String(typeId || ''));
+  if (!type) {
+    return false;
+  }
+
+  const rows = ensureArray(getByPath(state.data, graph.spec.nodes));
+  const id = getNextBlueprintNodeId(rows, graph.spec);
+  const item = createBlueprintNodeValue(graph.spec, type, id, 0);
+  if (getGraphAlgorithm() !== 'tree') {
+    setByPath(item, graph.spec.position, { x: 8, y: 8 });
+  }
+  pushHistory(`创建 ${type.title || type.id}`);
+  rows.push(item);
+  setByPath(state.data, graph.spec.nodes, rows);
+  state.selectedKey = `${graph.spec.nodes}:${id}`;
+  state.selectedEdge = null;
+  markDirtyAndRender(`已创建 ${type.title || type.id}`);
+  return true;
+}
+
+function addBlueprintChild(node, options, graph = buildBlueprintModel()) {
+  const choice = getBlueprintChildChoices(node, graph).find((candidate) => (
+    candidate.type.id === options.nodeType
+      && candidate.output.id === options.fromPort
+      && candidate.input.id === options.toPort
+  ));
+  if (!choice) {
+    return false;
+  }
+
+  const nodeRows = ensureArray(getByPath(state.data, graph.spec.nodes));
+  const edgeRows = ensureArray(getByPath(state.data, graph.spec.edges));
+  const id = getNextBlueprintNodeId(nodeRows, graph.spec);
+  const order = getNextBlueprintChildOrder(node, graph);
+  const item = createBlueprintNodeValue(graph.spec, choice.type, id, order);
+  if (getGraphAlgorithm() !== 'tree') {
+    const parentPos = getByPath(node.value, graph.spec.position) || { x: 0, y: 0 };
+    setByPath(item, graph.spec.position, {
+      x: Number(parentPos.x || 0) + 5,
+      y: Number(parentPos.y || 0) + 8 + (node.outgoing?.length || 0) * 2
+    });
+  }
+  const edge = createBlueprintEdgeValue(
+    getNextBlueprintEdgeId(edgeRows),
+    node.id,
+    choice.output.id,
+    id,
+    choice.input.id
+  );
+
+  pushHistory(`添加 ${choice.type.title || choice.type.id}`);
+  nodeRows.push(item);
+  edgeRows.push(edge);
+  setByPath(state.data, graph.spec.nodes, nodeRows);
+  setByPath(state.data, graph.spec.edges, edgeRows);
+  state.selectedKey = `${graph.spec.nodes}:${id}`;
+  state.selectedEdge = null;
+  markDirtyAndRender(`已添加 ${choice.type.title || choice.type.id}`);
+  return true;
+}
+
+function createBlueprintNodeValue(spec, type, id, order) {
+  const item = {};
+  setByPath(item, spec.nodeId, id);
+  setByPath(item, spec.nodeType, type.id);
+  if (spec.note) {
+    setByPath(item, spec.note, '');
+  }
+  const values = {};
+  (type.inputs || []).filter((port) => port.kind === 'data').forEach((port) => {
+    if (port.default !== undefined) {
+      values[port.id] = clone(port.default);
+    }
+  });
+  if ((type.inputs || []).some((port) => port.id === 'name') && state.data?.id) {
+    values.name = state.data.id;
+  }
+  if ((type.inputs || []).some((port) => port.id === 'order')) {
+    values.order = Number.isFinite(order) ? order : 0;
+  }
+  setByPath(item, spec.values, values);
+  return item;
+}
+
+function createBlueprintEdgeValue(id, fromNode, fromPort, toNode, toPort) {
+  return {
+    id,
+    from: { node: fromNode, port: fromPort },
+    to: { node: toNode, port: toPort }
+  };
+}
+
+function getNextBlueprintNodeId(rows, spec) {
+  return rows.reduce((highest, item) => {
+    const value = Number(getByPath(item, spec.nodeId));
+    return Number.isInteger(value) ? Math.max(highest, value) : highest;
+  }, 0) + 1;
+}
+
+function getNextBlueprintEdgeId(rows, reserved = new Set()) {
+  const used = new Set(rows.map((item) => String(item?.id || '')));
+  let index = 1;
+  while (used.has(`e_${index}`) || reserved.has(`e_${index}`)) {
+    index += 1;
+  }
+  const id = `e_${index}`;
+  reserved.add(id);
+  return id;
+}
+
+function getNextBlueprintChildOrder(node, graph) {
+  const valuesPath = graph.spec.values || 'values';
+  return (node.outgoing || [])
+    .filter((edge) => edge.kind === 'control')
+    .map((edge) => Number(getByPath(graph.nodeMap.get(edge.to)?.value, `${valuesPath}.order`)))
+    .filter(Number.isFinite)
+    .reduce((highest, value) => Math.max(highest, value), -1) + 1;
+}
+
+function getBlueprintParentEdge(node) {
+  return (node.incoming || []).find((edge) => edge.kind === 'control') || null;
+}
+
+function getBlueprintSiblings(node, graph) {
+  const parentEdge = getBlueprintParentEdge(node);
+  if (!parentEdge) {
+    return [];
+  }
+  const parent = graph.nodeMap.get(parentEdge.from);
+  const siblings = (parent?.outgoing || [])
+    .filter((edge) => edge.kind === 'control' && edge.fromPort === parentEdge.fromPort)
+    .map((edge) => graph.nodeMap.get(edge.to))
+    .filter(Boolean);
+  const valuesPath = graph.spec.values || 'values';
+  return siblings.sort((left, right) => (
+    Number(getByPath(left.value, `${valuesPath}.order`) ?? left.id ?? 0)
+      - Number(getByPath(right.value, `${valuesPath}.order`) ?? right.id ?? 0)
+    || Number(left.id || 0) - Number(right.id || 0)
+  ));
+}
+
+function canMoveBlueprintBranch(node, graph, direction) {
+  if (getGraphAlgorithm() !== 'tree') {
+    return false;
+  }
+  const siblings = getBlueprintSiblings(node, graph);
+  const index = siblings.findIndex((candidate) => candidate.key === node.key);
+  return index >= 0 && index + direction >= 0 && index + direction < siblings.length;
+}
+
+function moveBlueprintBranch(node, direction, graph = buildBlueprintModel()) {
+  if (!canMoveBlueprintBranch(node, graph, direction)) {
+    return false;
+  }
+  const siblings = getBlueprintSiblings(node, graph);
+  const index = siblings.findIndex((candidate) => candidate.key === node.key);
+  const target = index + direction;
+  pushHistory(direction < 0 ? '上移行为树分支' : '下移行为树分支');
+  siblings.forEach((candidate, order) => setBlueprintNodeOrder(candidate, graph.spec, order));
+  setBlueprintNodeOrder(siblings[index], graph.spec, target);
+  setBlueprintNodeOrder(siblings[target], graph.spec, index);
+  state.selectedKey = node.key;
+  state.selectedEdge = null;
+  markDirtyAndRender(direction < 0 ? '分支优先级已上移' : '分支优先级已下移');
+  return true;
+}
+
+function setBlueprintNodeOrder(node, spec, order) {
+  setByPath(node.value, `${spec.values || 'values'}.order`, order);
+}
+
+function canDuplicateBlueprintBranch(node, graph) {
+  if (getGraphAlgorithm() !== 'tree') {
+    return true;
+  }
+  const parentEdge = getBlueprintParentEdge(node);
+  const parent = parentEdge ? graph.nodeMap.get(parentEdge.from) : null;
+  const output = parent ? getBlueprintPort(parent, parentEdge.fromPort, 'output') : null;
+  return !!parentEdge && !!output?.multiple;
+}
+
+function duplicateBlueprintBranch(node, graph = buildBlueprintModel()) {
+  if (!canDuplicateBlueprintBranch(node, graph)) {
+    return false;
+  }
+  const tree = getGraphAlgorithm() === 'tree';
+  const copies = tree ? getBlueprintSubtreeNodes(node, graph) : [node];
+  const copyIds = new Set(copies.map((candidate) => String(candidate.id)));
+  const nodeRows = ensureArray(getByPath(state.data, graph.spec.nodes));
+  const edgeRows = ensureArray(getByPath(state.data, graph.spec.edges));
+  const idMap = new Map();
+  let nextId = getNextBlueprintNodeId(nodeRows, graph.spec);
+  copies.forEach((candidate) => {
+    idMap.set(String(candidate.id), nextId);
+    nextId += 1;
+  });
+
+  const parentEdge = tree ? getBlueprintParentEdge(node) : null;
+  const siblings = tree ? getBlueprintSiblings(node, graph) : [];
+  const siblingIndex = siblings.findIndex((candidate) => candidate.key === node.key);
+  pushHistory(tree ? '复制行为树分支' : '复制蓝图节点');
+  if (tree) {
+    siblings.forEach((candidate, order) => setBlueprintNodeOrder(candidate, graph.spec, order));
+    siblings.slice(siblingIndex + 1).forEach((candidate, offset) => (
+      setBlueprintNodeOrder(candidate, graph.spec, siblingIndex + 2 + offset)
+    ));
+  }
+
+  const copiedRows = copies.map((candidate) => {
+    const item = clone(candidate.value);
+    setByPath(item, graph.spec.nodeId, idMap.get(String(candidate.id)));
+    if (!tree) {
+      const pos = getByPath(item, graph.spec.position) || { x: 0, y: 0 };
+      setByPath(item, graph.spec.position, {
+        x: Number(pos.x || 0) + 4,
+        y: Number(pos.y || 0) + 4
+      });
+    }
+    return item;
+  });
+  if (tree) {
+    const copiedRoot = copiedRows.find((item) => (
+      String(getByPath(item, graph.spec.nodeId)) === String(idMap.get(String(node.id)))
+    ));
+    setByPath(copiedRoot, `${graph.spec.values || 'values'}.order`, siblingIndex + 1);
+  }
+
+  const reservedEdgeIds = new Set();
+  const copiedEdges = graph.edges
+    .filter((edge) => copyIds.has(String(edge.sourceNode?.id)) && copyIds.has(String(edge.targetNode?.id)))
+    .map((edge) => {
+      const item = clone(edge.value);
+      item.id = getNextBlueprintEdgeId(edgeRows, reservedEdgeIds);
+      setByPath(item, 'from.node', idMap.get(String(edge.sourceNode.id)));
+      setByPath(item, 'to.node', idMap.get(String(edge.targetNode.id)));
+      return item;
+    });
+  if (tree && parentEdge) {
+    const item = clone(parentEdge.value);
+    item.id = getNextBlueprintEdgeId(edgeRows, reservedEdgeIds);
+    setByPath(item, 'to.node', idMap.get(String(node.id)));
+    copiedEdges.push(item);
+  }
+
+  nodeRows.push(...copiedRows);
+  edgeRows.push(...copiedEdges);
+  setByPath(state.data, graph.spec.nodes, nodeRows);
+  setByPath(state.data, graph.spec.edges, edgeRows);
+  const copiedId = idMap.get(String(node.id));
+  state.selectedKey = `${graph.spec.nodes}:${copiedId}`;
+  state.selectedEdge = null;
+  markDirtyAndRender(tree ? '已复制当前分支' : '已复制节点');
+  return true;
+}
+
+function getBlueprintSubtreeNodes(node, graph) {
+  const result = [];
+  const pending = [node];
+  const visited = new Set();
+  while (pending.length) {
+    const current = pending.pop();
+    if (!current || visited.has(current.key)) {
+      continue;
+    }
+    visited.add(current.key);
+    result.push(current);
+    (current.outgoing || [])
+      .filter((edge) => edge.kind === 'control')
+      .forEach((edge) => pending.push(graph.nodeMap.get(edge.to)));
+  }
+  return result;
+}
+
+function deleteBlueprintBranch(node, graph = buildBlueprintModel()) {
+  const tree = getGraphAlgorithm() === 'tree';
+  const removed = tree ? getBlueprintSubtreeNodes(node, graph) : [node];
+  const removedIds = new Set(removed.map((candidate) => String(candidate.id)));
+  const root = node.typeSpec?.category === 'root';
+  const label = root
+    ? '清空整棵树'
+    : (tree ? `删除当前分支及其 ${Math.max(0, removed.length - 1)} 个子节点` : '删除节点');
+  if (!window.confirm(`${label}？`)) {
+    return false;
+  }
+
+  const nodeRows = ensureArray(getByPath(state.data, graph.spec.nodes));
+  const edgeRows = ensureArray(getByPath(state.data, graph.spec.edges));
+  pushHistory(label);
+  setByPath(state.data, graph.spec.nodes, nodeRows.filter((item) => (
+    !removedIds.has(String(getByPath(item, graph.spec.nodeId)))
+  )));
+  setByPath(state.data, graph.spec.edges, edgeRows.filter((item) => (
+    !removedIds.has(String(getByPath(item, 'from.node')))
+      && !removedIds.has(String(getByPath(item, 'to.node')))
+  )));
+  state.selectedKey = '';
+  state.selectedEdge = null;
+  markDirtyAndRender(root ? '行为树已清空' : '分支已删除');
+  return true;
 }
 
 function runGenericGraphContextAction(actionId) {
@@ -451,6 +1105,7 @@ function deleteDialogOption(optionId) {
 }
 
 function renderGraph() {
+  renderBlueprintGuide(null);
   if (isBlueprintGraph()) {
     renderBlueprintGraph();
     return;
@@ -475,10 +1130,12 @@ function renderGraph() {
 
 function renderBlueprintGraph(viewSpec = null) {
   const model = buildBlueprintModel(viewSpec);
-  const layout = layoutBlueprintGraph(model);
+  let layout = layoutBlueprintGraph(model);
   graphNodes.innerHTML = '';
   graphEdges.innerHTML = '';
   graphView.dataset.layout = 'blueprint';
+  graphView.dataset.profile = getBlueprintProfile(viewSpec);
+  renderBlueprintGuide(viewSpec);
   applyGraphLayoutSurface(layout);
 
   for (const node of layout.nodes) {
@@ -512,7 +1169,7 @@ function renderBlueprintGraph(viewSpec = null) {
       updateActionButtons();
     });
     item.addEventListener('mousedown', (event) => {
-      if (event.button !== 0) {
+      if (event.button !== 0 || !isFreeGraph()) {
         return;
       }
       startGraphDrag(event, node, item, pos);
@@ -520,6 +1177,16 @@ function renderBlueprintGraph(viewSpec = null) {
     graphNodes.append(item);
   }
 
+  if (getGraphAlgorithm() === 'tree') {
+    layout = layoutBlueprintGraph(model, measureBlueprintNodeSizes(layout.sizes));
+    layout.positions.forEach((pos, key) => {
+      const item = graphNodes.querySelector(`[data-key="${CSS.escape(key)}"]`);
+      if (item) {
+        item.style.left = `${pos.x}px`;
+        item.style.top = `${pos.y}px`;
+      }
+    });
+  }
   const measuredLayout = measureBlueprintLayout(model, layout);
   applyGraphLayoutSurface(measuredLayout);
   drawBlueprintEdges(measuredLayout);
@@ -539,11 +1206,13 @@ function isBlueprintGraph() {
 function getBlueprintSpec(viewSpec = null) {
   const spec = state.domain?.graph?.blueprint || {};
   return {
+    profile: viewSpec?.profile || spec.profile || state.domain?.graph?.profile || '',
     nodes: viewSpec?.target || spec.nodes || state.domain?.graph?.nodes || state.domain?.model?.nodes || 'nodes',
     edges: viewSpec?.edges || spec.edges || state.domain?.model?.edges || 'edges',
     nodeId: spec.nodeId || state.domain?.graph?.nodeId || 'id',
     nodeType: spec.nodeType || 'type',
     values: spec.values || 'values',
+    note: spec.note || '',
     position: spec.position || state.domain?.graph?.position || 'pos',
     types: spec.types || []
   };
@@ -636,11 +1305,54 @@ function normalizeBlueprintNodeType(type) {
     id: String(type.id || ''),
     title: type.title || type.label || titleFromPath(type.id || ''),
     label: type.label || type.title || titleFromPath(type.id || ''),
+    description: type.description || '',
     color: type.color || '',
+    category: type.category || '',
+    icon: type.icon || '',
     ports,
     inputs: ports.filter((port) => port.direction === 'input'),
     outputs: ports.filter((port) => port.direction === 'output')
   };
+}
+
+function getBlueprintProfile(viewSpec = null) {
+  return String(getBlueprintSpec(viewSpec).profile || '').trim().toLowerCase();
+}
+
+function isBehaviorTreeBlueprint(viewSpec = null) {
+  return getBlueprintProfile(viewSpec) === 'behavior-tree';
+}
+
+function renderBlueprintGuide(viewSpec = null) {
+  if (!graphGuide) {
+    return;
+  }
+  if (!viewSpec && !isBlueprintGraph()) {
+    graphGuide.classList.add('hidden');
+    graphGuide.innerHTML = '';
+    return;
+  }
+  if (!isBehaviorTreeBlueprint(viewSpec)) {
+    graphGuide.classList.add('hidden');
+    graphGuide.innerHTML = '';
+    return;
+  }
+
+  const description = String(state.data?.description || '').trim();
+  graphGuide.innerHTML = `
+    <div class="graph-guide__eyebrow">如何阅读</div>
+    ${description ? `<div class="graph-guide__description">${escapeHtml(description)}</div>` : '<div class="graph-guide__description graph-guide__description--empty">请在文件信息中补充整棵树的用途。</div>'}
+    <div class="graph-guide__rule">从上到下执行，同层数字越小越先。节点会返回成功、失败或运行中；父节点如何处理结果，以复合节点卡片的说明为准。</div>
+    <div class="graph-guide__shortcut">右键节点：编辑、添加子节点、排序、复制或删除分支；按住右键拖动画布。</div>
+    <div class="graph-guide__legend" aria-label="行为树节点分类">
+      <span class="is-root">根</span>
+      <span class="is-composite">复合</span>
+      <span class="is-decorator">装饰</span>
+      <span class="is-condition">条件</span>
+      <span class="is-action">动作</span>
+    </div>
+  `;
+  graphGuide.classList.remove('hidden');
 }
 
 function getBlueprintPort(node, portId, direction = '') {
@@ -648,7 +1360,7 @@ function getBlueprintPort(node, portId, direction = '') {
   return ports.find((port) => port.id === portId && (!direction || port.direction === direction)) || null;
 }
 
-function layoutBlueprintGraph(model) {
+function layoutBlueprintGraph(model, measuredSizes = null) {
   const grid = getGraphGridSize();
   const positions = new Map();
   const sizes = new Map();
@@ -657,11 +1369,146 @@ function layoutBlueprintGraph(model) {
     positions.set(node.key, saved
       ? { x: saved.x * grid, y: saved.y * grid }
       : { x: 80 + index * 300, y: 100 });
-    sizes.set(node.key, {
-      width: 280,
-      height: Math.max(150, 74 + Math.max(node.typeSpec?.inputs?.length || 0, node.typeSpec?.outputs?.length || 0) * 30)
+    sizes.set(node.key, measuredSizes?.get(node.key) || {
+      width: isBehaviorTreeBlueprint() ? 224 : 280,
+      height: isBehaviorTreeBlueprint()
+        ? 92
+        : Math.max(150, 74 + Math.max(node.typeSpec?.inputs?.length || 0, node.typeSpec?.outputs?.length || 0) * 30)
     });
   });
+  if (getGraphAlgorithm() === 'tree') {
+    return layoutBlueprintTree(model, sizes);
+  }
+  const width = Math.max(1100, maxGraphExtent(positions, sizes, 'x') + FIXED_GRAPH_MARGIN);
+  const height = Math.max(720, maxGraphExtent(positions, sizes, 'y') + FIXED_GRAPH_MARGIN);
+  return { ...model, positions, sizes, portAnchors: new Map(), edges: model.edges, width, height };
+}
+
+function measureBlueprintNodeSizes(fallback) {
+  const sizes = new Map(fallback || []);
+  graphNodes.querySelectorAll('.blueprint-node').forEach((item) => {
+    const key = item.dataset.key;
+    if (!key) {
+      return;
+    }
+    sizes.set(key, {
+      width: item.offsetWidth || sizes.get(key)?.width || 280,
+      height: item.offsetHeight || sizes.get(key)?.height || 150
+    });
+  });
+  return sizes;
+}
+
+function layoutBlueprintTree(model, sizes) {
+  const horizontalGap = 34;
+  const verticalGap = 84;
+  const margin = 80;
+  const controlEdges = model.edges.filter((edge) => edge.kind === 'control');
+  const children = new Map(model.nodes.map((node) => [node.key, []]));
+  const incoming = new Map(model.nodes.map((node) => [node.key, 0]));
+  controlEdges.forEach((edge) => {
+    if (!children.has(edge.from) || !incoming.has(edge.to)) {
+      return;
+    }
+    children.get(edge.from).push(edge.to);
+    incoming.set(edge.to, incoming.get(edge.to) + 1);
+  });
+  children.forEach((keys) => keys.sort((left, right) => {
+    const leftNode = model.nodeMap.get(left);
+    const rightNode = model.nodeMap.get(right);
+    const valuesPath = model.spec.values || 'values';
+    const leftOrder = Number(getByPath(leftNode?.value, `${valuesPath}.order`) ?? leftNode?.id ?? 0);
+    const rightOrder = Number(getByPath(rightNode?.value, `${valuesPath}.order`) ?? rightNode?.id ?? 0);
+    return leftOrder - rightOrder || Number(leftNode?.id || 0) - Number(rightNode?.id || 0);
+  }));
+
+  const subtreeWidths = new Map();
+  const visiting = new Set();
+  function subtreeWidth(key) {
+    if (subtreeWidths.has(key)) {
+      return subtreeWidths.get(key);
+    }
+    const own = sizes.get(key)?.width || 224;
+    if (visiting.has(key)) {
+      return own;
+    }
+    visiting.add(key);
+    const childKeys = children.get(key) || [];
+    const childWidth = childKeys.reduce((sum, childKey, index) => (
+      sum + subtreeWidth(childKey) + (index > 0 ? horizontalGap : 0)
+    ), 0);
+    visiting.delete(key);
+    const width = Math.max(own, childWidth);
+    subtreeWidths.set(key, width);
+    return width;
+  }
+
+  const depth = new Map();
+  const depthHeights = new Map();
+  function measureDepth(key, level, path = new Set()) {
+    if (path.has(key)) {
+      return;
+    }
+    const previous = depth.get(key);
+    if (previous !== undefined && previous <= level) {
+      return;
+    }
+    depth.set(key, level);
+    depthHeights.set(level, Math.max(depthHeights.get(level) || 0, sizes.get(key)?.height || 92));
+    const nextPath = new Set(path);
+    nextPath.add(key);
+    (children.get(key) || []).forEach((child) => measureDepth(child, level + 1, nextPath));
+  }
+
+  const roots = model.nodes
+    .filter((node) => (incoming.get(node.key) || 0) === 0)
+    .sort((left, right) => Number(left.id || 0) - Number(right.id || 0));
+  roots.forEach((root) => measureDepth(root.key, 0));
+  const levelY = new Map();
+  let nextY = margin;
+  const maxLevel = Math.max(0, ...depthHeights.keys());
+  for (let level = 0; level <= maxLevel; level += 1) {
+    levelY.set(level, nextY);
+    nextY += (depthHeights.get(level) || 92) + verticalGap;
+  }
+
+  const positions = new Map();
+  const placed = new Set();
+  function place(key, level, left, path = new Set()) {
+    if (placed.has(key) || path.has(key)) {
+      return;
+    }
+    const nextPath = new Set(path);
+    nextPath.add(key);
+    const width = subtreeWidth(key);
+    const own = sizes.get(key)?.width || 224;
+    positions.set(key, {
+      x: left + Math.max(0, (width - own) / 2),
+      y: levelY.get(level) ?? nextY
+    });
+    placed.add(key);
+    const childKeys = children.get(key) || [];
+    const childrenWidth = childKeys.reduce((sum, childKey, index) => (
+      sum + subtreeWidth(childKey) + (index > 0 ? horizontalGap : 0)
+    ), 0);
+    let childLeft = left + Math.max(0, (width - childrenWidth) / 2);
+    childKeys.forEach((childKey) => {
+      place(childKey, level + 1, childLeft, nextPath);
+      childLeft += subtreeWidth(childKey) + horizontalGap;
+    });
+  }
+
+  let forestLeft = margin;
+  roots.forEach((root) => {
+    place(root.key, 0, forestLeft);
+    forestLeft += subtreeWidth(root.key) + horizontalGap * 2;
+  });
+  model.nodes.filter((node) => !placed.has(node.key)).forEach((node) => {
+    positions.set(node.key, { x: forestLeft, y: nextY });
+    forestLeft += (sizes.get(node.key)?.width || 224) + horizontalGap;
+    placed.add(node.key);
+  });
+
   const width = Math.max(1100, maxGraphExtent(positions, sizes, 'x') + FIXED_GRAPH_MARGIN);
   const height = Math.max(720, maxGraphExtent(positions, sizes, 'y') + FIXED_GRAPH_MARGIN);
   return { ...model, positions, sizes, portAnchors: new Map(), edges: model.edges, width, height };
@@ -704,7 +1551,10 @@ function routeBlueprintEdge(edge, portAnchors) {
   if (!start || !end) {
     return null;
   }
-  const handle = Math.max(80, Math.abs(end.x - start.x) * 0.5);
+  const vertical = getGraphAlgorithm() === 'tree';
+  const handle = vertical
+    ? Math.max(46, Math.abs(end.y - start.y) * 0.42)
+    : Math.max(80, Math.abs(end.x - start.x) * 0.5);
   return {
     ...edge,
     startX: start.x,
@@ -713,12 +1563,18 @@ function routeBlueprintEdge(edge, portAnchors) {
     endY: end.y,
     labelX: (start.x + end.x) / 2,
     labelY: (start.y + end.y) / 2,
-    path: `M ${start.x} ${start.y} C ${start.x + handle} ${start.y}, ${end.x - handle} ${end.y}, ${end.x} ${end.y}`
+    path: vertical
+      ? `M ${start.x} ${start.y} C ${start.x} ${start.y + handle}, ${end.x} ${end.y - handle}, ${end.x} ${end.y}`
+      : `M ${start.x} ${start.y} C ${start.x + handle} ${start.y}, ${end.x - handle} ${end.y}, ${end.x} ${end.y}`
   };
 }
 
 function getBlueprintNodeClassName(node) {
   const classes = ['graph-node', 'blueprint-node'];
+  if (isBehaviorTreeBlueprint()) {
+    classes.push('behavior-tree-node');
+    classes.push(`behavior-tree-node--${node.typeSpec?.category || 'action'}`);
+  }
   if (!node.typeSpec) {
     classes.push('blueprint-node--invalid');
   }
@@ -726,6 +1582,9 @@ function getBlueprintNodeClassName(node) {
 }
 
 function renderBlueprintNodeContent(node) {
+  if (isBehaviorTreeBlueprint()) {
+    return renderBehaviorTreeNodeContent(node);
+  }
   const inputs = node.typeSpec?.inputs || [];
   const outputs = node.typeSpec?.outputs || [];
   return `
@@ -741,6 +1600,41 @@ function renderBlueprintNodeContent(node) {
         ${outputs.map((port) => renderBlueprintPort(node, port)).join('')}
       </div>
     </div>
+  `;
+}
+
+function renderBehaviorTreeNodeContent(node) {
+  const inputs = (node.typeSpec?.inputs || []).filter((port) => port.kind === 'control');
+  const outputs = (node.typeSpec?.outputs || []).filter((port) => port.kind === 'control');
+  const data = (node.typeSpec?.inputs || [])
+    .filter((port) => port.kind === 'data' && port.id !== 'order')
+    .map((port) => ({ port, value: getBlueprintPortDisplayValue(node, port) }))
+    .filter((entry) => entry.value !== '')
+    .slice(0, 4);
+  const orderPort = (node.typeSpec?.inputs || []).find((port) => port.id === 'order');
+  const order = orderPort ? getBlueprintPortDisplayValue(node, orderPort) : '';
+  const category = node.typeSpec?.category || 'action';
+  const description = String(node.typeSpec?.description || '').trim();
+  const notePath = getBlueprintSpec().note;
+  const note = notePath ? String(getByPath(node.value, notePath) || '').trim() : '';
+  const labels = {
+    root: '根',
+    composite: '复合',
+    decorator: '装饰',
+    condition: '条件',
+    action: '动作'
+  };
+  return `
+    ${inputs.map((port) => `<span class="blueprint-port blueprint-port--control behavior-tree-node__connector behavior-tree-node__connector--input" data-port-id="${escapeHtml(port.id)}" data-port-direction="input" title="${escapeHtml(port.label || port.id)}"></span>`).join('')}
+    <div class="behavior-tree-node__head">
+      <span class="behavior-tree-node__category">${escapeHtml(labels[category] || category)}</span>
+      <span class="behavior-tree-node__title">${escapeHtml(node.typeSpec?.title || node.typeId || 'Unknown')}</span>
+      ${order !== '' ? `<span class="behavior-tree-node__order">${escapeHtml(order)}</span>` : `<span class="behavior-tree-node__id">#${escapeHtml(node.id)}</span>`}
+    </div>
+    ${description ? `<div class="behavior-tree-node__description" title="${escapeHtml(description)}">${escapeHtml(description)}</div>` : ''}
+    ${note ? `<div class="behavior-tree-node__note"><b>本节点</b>${escapeHtml(note)}</div>` : ''}
+    ${data.length ? `<div class="behavior-tree-node__facts">${data.map(({ port, value }) => `<span><b>${escapeHtml(port.label || port.id)}</b>${escapeHtml(value)}</span>`).join('')}</div>` : ''}
+    ${outputs.map((port) => `<span class="blueprint-port blueprint-port--control behavior-tree-node__connector behavior-tree-node__connector--output" data-port-id="${escapeHtml(port.id)}" data-port-direction="output" title="${escapeHtml(port.label || port.id)}"></span>`).join('')}
   `;
 }
 
@@ -814,6 +1708,7 @@ function redrawBlueprintGraphEdgesDuringDrag() {
   const model = buildBlueprintModel();
   const layout = measureBlueprintLayout(model, layoutBlueprintGraph(model));
   graphView.dataset.layout = 'blueprint';
+  graphView.dataset.profile = getBlueprintProfile();
   applyGraphLayoutSurface(layout);
   drawBlueprintEdges(layout);
 }
@@ -821,6 +1716,7 @@ function redrawBlueprintGraphEdgesDuringDrag() {
 function drawGraphLayout(graph, layout) {
   graphNodes.innerHTML = '';
   graphView.dataset.layout = getGraphLayoutMode();
+  graphView.dataset.profile = getGraphProfileId();
   applyGraphLayoutSurface(layout);
   drawGraphEdges(layout);
 
@@ -846,6 +1742,9 @@ function drawGraphLayout(graph, layout) {
     item.dataset.key = node.key;
     item.style.left = `${pos.x}px`;
     item.style.top = `${pos.y}px`;
+    if (size?.width) {
+      item.style.width = `${size.width}px`;
+    }
     if (size?.height) {
       item.style.height = `${size.height}px`;
     }
@@ -902,6 +1801,7 @@ function drawGraphEdges(layout) {
       event.stopPropagation();
       selectGraphEdge(edge, edgeKey);
     });
+    bindStateMachineEdgeContextMenu(line, edge, edgeKey);
     graphEdges.append(line);
 
     const hitPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
@@ -911,24 +1811,77 @@ function drawGraphEdges(layout) {
       event.stopPropagation();
       selectGraphEdge(edge, edgeKey);
     });
+    bindStateMachineEdgeContextMenu(hitPath, edge, edgeKey);
     graphEdges.append(hitPath);
 
     if (edge.label) {
+      const labelX = edge.labelX ?? ((edge.startX + edge.endX) / 2);
+      const labelY = edge.labelY ?? ((edge.startY + edge.endY) / 2);
+      const lines = String(edge.label).split('\n');
+      if (isStateMachineProfile()) {
+        const labelWidth = Math.max(64, Math.min(210, ...lines.map((label) => (
+          [...label].reduce((width, character) => width + (character.charCodeAt(0) > 255 ? 10 : 6.2), 0) + 18
+        ))));
+        const labelHeight = lines.length * 13 + 8;
+        const background = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        background.classList.add('graph-edge__label-bg');
+        if (edge.route) {
+          background.classList.add(`graph-edge__label-bg--${edge.route}`);
+        }
+        if (edgeSelected) {
+          background.classList.add('graph-edge__label-bg--highlight');
+        }
+        background.setAttribute('x', String(labelX - labelWidth / 2));
+        background.setAttribute('y', String(labelY - 13));
+        background.setAttribute('width', String(labelWidth));
+        background.setAttribute('height', String(labelHeight));
+        background.setAttribute('rx', '6');
+        background.addEventListener('click', (event) => {
+          event.stopPropagation();
+          selectGraphEdge(edge, edgeKey);
+        });
+        bindStateMachineEdgeContextMenu(background, edge, edgeKey);
+        graphEdges.append(background);
+      }
+
       const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       text.classList.add('graph-edge__label');
       if (edgeSelected) {
         text.classList.add('graph-edge__label--highlight');
       }
-      text.setAttribute('x', String(edge.labelX ?? ((edge.startX + edge.endX) / 2)));
-      text.setAttribute('y', String(edge.labelY ?? ((edge.startY + edge.endY) / 2)));
+      text.setAttribute('x', String(labelX));
+      text.setAttribute('y', String(labelY));
       text.setAttribute('text-anchor', 'middle');
-      text.textContent = edge.label;
+      if (isStateMachineProfile()) {
+        const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+        title.textContent = getStateMachineEdgeTooltip(edge);
+        text.append(title);
+      }
+      lines.forEach((label, lineIndex) => {
+        const span = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
+        span.setAttribute('x', String(labelX));
+        span.setAttribute('dy', lineIndex === 0 ? '0' : '1.25em');
+        span.textContent = label;
+        text.append(span);
+      });
       text.addEventListener('click', (event) => {
         event.stopPropagation();
         selectGraphEdge(edge, edgeKey);
       });
+      bindStateMachineEdgeContextMenu(text, edge, edgeKey);
       graphEdges.append(text);
     }
+  });
+}
+
+function bindStateMachineEdgeContextMenu(element, edge, edgeKey) {
+  if (!isStateMachineProfile() || !edge?.dataPath) {
+    return;
+  }
+  element.addEventListener('contextmenu', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    showStateMachineEdgeContextMenu(event.clientX, event.clientY, edge, edgeKey);
   });
 }
 
@@ -958,6 +1911,7 @@ function redrawFreeGraphEdgesDuringDrag() {
   const graph = buildGraphModel();
   const layout = layoutFreeGraph(graph, getRenderedGraphNodeSizeOverrides());
   graphView.dataset.layout = getGraphLayoutMode();
+  graphView.dataset.profile = getGraphProfileId();
   applyGraphLayoutSurface(layout);
   drawGraphEdges(layout);
 }
@@ -972,12 +1926,17 @@ function selectGraphEdge(edge, edgeKey) {
 }
 
 function getGraphEdgeSelectionKey(edge, index) {
-  return `${edge.from}->${edge.to}:${edge.field || edge.kind || 'edge'}:${index}`;
+  return edge.dataPath
+    ? `edge:${edge.dataPath}`
+    : `${edge.from}->${edge.to}:${edge.field || edge.kind || 'edge'}:${index}`;
 }
 
 function isGraphEdgeSelected(edgeKey, edge) {
   if (state.selectedKey === edgeKey) {
     return true;
+  }
+  if (state.selectedEdge?.dataPath || edge.dataPath) {
+    return !!state.selectedEdge?.dataPath && state.selectedEdge.dataPath === edge.dataPath;
   }
   return !!state.selectedEdge
     && state.selectedEdge.from === edge.from
@@ -1048,6 +2007,9 @@ function createGraphArrowDefs() {
 }
 
 function applyGraphEdgeClasses(path, edge) {
+  if (edge.route) {
+    path.classList.add(`graph-edge--state-${edge.route}`);
+  }
   if (edge.field === 'fail' || edge.kind === 'fail' || edge.tone === 'fail' || edge.tone === 'danger') {
     path.classList.add('graph-edge--fail');
   }
@@ -1063,9 +2025,22 @@ function applyGraphEdgeClasses(path, edge) {
   } else if (color === 'green') {
     path.classList.add('graph-edge--green');
   }
-  if (edge.endY !== undefined && edge.startY !== undefined && edge.endY <= edge.startY) {
+  if (edge.route === 'return' || edge.route === 'self') {
+    path.classList.add('graph-edge--back');
+  } else if (!edge.route && edge.endY !== undefined && edge.startY !== undefined && edge.endY <= edge.startY) {
     path.classList.add('graph-edge--back');
   }
+}
+
+function getStateMachineEdgeTooltip(edge) {
+  const triggerLabels = { tick: '每帧', success: '成功', failure: '失败' };
+  const source = edge.sourceValue || {};
+  return [
+    source.label || String(edge.label || '').split('\n')[0],
+    triggerLabels[source.trigger] || source.trigger || '',
+    source.condition ? `条件 ${source.condition}` : '',
+    Number(source.priority || 0) ? `优先级 ${source.priority}` : ''
+  ].filter(Boolean).join(' · ');
 }
 
 function buildGraphModel() {
@@ -1102,7 +2077,7 @@ function buildGraphModel() {
     const path = model[rule.sourceCollection] || rule.sourceCollection;
     const items = ensureArray(getByPath(state.data, path));
     const sourceIdKey = getGraphCollectionIdKey(rule.sourceCollection);
-    for (const item of items) {
+    for (const [sourceIndex, item] of items.entries()) {
       const fromId = item?.[sourceIdKey];
       if (fromId === null || fromId === undefined || fromId === '') {
         continue;
@@ -1128,6 +2103,7 @@ function buildGraphModel() {
             label: getGraphEdgeLabel(rule, target.sourceValue),
             rule: rule.raw,
             sourceValue: target.sourceValue,
+            dataPath: joinGraphDataPath(`${path}[${sourceIndex}]`, target.sourcePath),
             targetValue: targetNode?.value || null,
             sourceNode,
             targetNode
@@ -1186,18 +2162,20 @@ function collectGraphEdgeTargets(root, pathText) {
   if (!parts.length) {
     return [];
   }
-  let current = [{ value: root, sourceValue: root }];
+  let current = [{ value: root, sourceValue: root, sourcePath: '' }];
   parts.forEach((part, index) => {
     const isLast = index === parts.length - 1;
     const next = [];
     current.forEach((entry) => {
       const value = entry.value;
       if (Array.isArray(value)) {
-        value.forEach((item) => {
+        value.forEach((item, itemIndex) => {
           const child = getGraphEdgeChildValue(item, part);
+          const itemPath = `${entry.sourcePath}[${itemIndex}]`;
           next.push({
             value: child,
-            sourceValue: isLast ? item : child
+            sourceValue: isLast ? item : child,
+            sourcePath: isLast ? itemPath : joinGraphDataPath(itemPath, part)
           });
         });
         return;
@@ -1205,12 +2183,23 @@ function collectGraphEdgeTargets(root, pathText) {
       const child = getGraphEdgeChildValue(value, part);
       next.push({
         value: child,
-        sourceValue: isLast ? value : child
+        sourceValue: isLast ? value : child,
+        sourcePath: isLast ? entry.sourcePath : joinGraphDataPath(entry.sourcePath, part)
       });
     });
     current = next;
   });
   return current.filter((entry) => entry.value !== undefined);
+}
+
+function joinGraphDataPath(base, relative) {
+  if (!relative) {
+    return base;
+  }
+  if (!base) {
+    return relative;
+  }
+  return relative.startsWith('[') ? `${base}${relative}` : `${base}.${relative}`;
 }
 
 function getGraphEdgeChildValue(value, key) {
@@ -1291,14 +2280,31 @@ function getGraphEdgeTone(rule, sourceValue) {
 }
 
 function getGraphEdgeLabel(rule, sourceValue) {
+  let label = '';
   if (rule.label) {
-    return String(rule.label);
+    label = String(rule.label);
   }
   if (rule.labelPath) {
     const value = getByPath(sourceValue, rule.labelPath);
     if (value !== undefined && value !== null && value !== '') {
-      return String(value);
+      label = String(value);
     }
+  }
+  if (isStateMachineProfile()) {
+    const triggerLabels = { tick: '每帧', success: '成功', failure: '失败' };
+    const trigger = triggerLabels[sourceValue?.trigger] || sourceValue?.trigger || '';
+    const condition = String(sourceValue?.condition || '').trim();
+    const priority = Number(sourceValue?.priority || 0);
+    const detail = [trigger, condition ? '有条件' : '', priority ? `P${priority}` : '']
+      .filter(Boolean)
+      .join(' · ');
+    if (label && detail) {
+      return `${label}\n${detail}`;
+    }
+    return label || detail;
+  }
+  if (label) {
+    return label;
   }
   if (rule.field === 'fail') {
     return getGraphLabel('failEdgeLabel', '失败');
@@ -1311,6 +2317,19 @@ function getGraphEdgeLabel(rule, sourceValue) {
 
 function getGraphNodeClassName(node, graph) {
   const classes = ['graph-node'];
+  if (isStateMachineProfile()) {
+    classes.push('graph-node--state-machine');
+    const viewState = String(node.value?.view_state || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+    if (viewState) {
+      classes.push(`graph-node--state-${viewState}`);
+    }
+    if (node.key === graph.entry) {
+      classes.push('graph-node--initial-state');
+    }
+    if (node.value?.parent) {
+      classes.push('graph-node--child-state');
+    }
+  }
   if (isVirtualGraphNode(node)) {
     classes.push('graph-node--pseudo');
     classes.push(node.virtual === 'start' ? 'graph-node--start' : 'graph-node--end');
@@ -1351,6 +2370,12 @@ function getGraphNodeClassName(node, graph) {
 
 function renderGraphNodeContent(node, graph) {
   if (isVirtualGraphNode(node)) {
+    if (isStateMachineProfile() && node.virtual === 'start') {
+      return `
+        <div class="state-machine-entry__dot"></div>
+        <div class="state-machine-entry__label">初始</div>
+      `;
+    }
     const isStart = node.virtual === 'start';
     return `
       <div class="graph-node__pseudo-mark">${escapeHtml(isStart ? getGraphLabel('startKind', '开始') : getGraphLabel('endKind', '结束'))}</div>
@@ -1374,6 +2399,20 @@ function renderGraphNodeContent(node, graph) {
 }
 
 function buildGraphNodeView(node, graph) {
+  if (isStateMachineProfile()) {
+    const initial = node.key === graph.entry;
+    const viewState = formatStateMachineViewState(node.value?.view_state);
+    return {
+      kindLabel: initial ? `初始 · ${viewState}` : viewState,
+      actorName: String(node.value?.label || node.value?.name || node.id),
+      faceText: '',
+      text: String(node.value?.description || '未填写状态说明'),
+      detailLines: [
+        `行为树 · ${node.value?.tree || '未设置'}`,
+        node.value?.parent ? `父状态 · ${node.value.parent}` : ''
+      ].filter(Boolean)
+    };
+  }
   if (hasConfiguredGraphNodeView()) {
     return buildConfiguredGraphNodeView(node, graph);
   }
@@ -1436,6 +2475,18 @@ function buildGraphNodeView(node, graph) {
     text,
     detailLines
   };
+}
+
+function formatStateMachineViewState(value) {
+  const id = String(value || '').trim().toLowerCase();
+  const labels = {
+    active: '行动',
+    windup: '前摇',
+    attack: '攻击',
+    hidden: '潜伏',
+    dormant: '休眠'
+  };
+  return labels[id] || String(value || '状态');
 }
 
 function hasConfiguredGraphNodeView() {
@@ -1702,6 +2753,12 @@ function getGraphNodeHeight(node, graph) {
   const actorLines = Math.max(1, estimateGraphTextLines(`${view.actorName || ''}${view.faceText || ''}`));
   const textLines = Math.max(1, estimateGraphTextLines(view.text || ''));
   const detailHeight = estimateGraphDetailBlockHeight(view.detailLines);
+  if (isStateMachineProfile()) {
+    return Math.max(148, 68
+      + actorLines * GRAPH_ACTOR_LINE_HEIGHT
+      + textLines * GRAPH_TEXT_LINE_HEIGHT
+      + detailHeight);
+  }
   const baseHeight = isBaseGraphNode(node, graph) ? 92 : 94;
   const expected = baseHeight
     + actorLines * GRAPH_ACTOR_LINE_HEIGHT
@@ -1715,7 +2772,7 @@ function getGraphNodeSize(node, graph, sizeOverrides = null) {
   const override = sizeOverrides?.get(node?.key);
   const measuredHeight = Number(override?.height) || 0;
   return {
-    width: GRAPH_NODE_WIDTH,
+    width: isStateMachineProfile() ? 220 : GRAPH_NODE_WIDTH,
     height: Math.max(estimatedHeight, measuredHeight)
   };
 }
@@ -1763,9 +2820,250 @@ function createEndNodeKey(key) {
 }
 
 function layoutGraph(graph, sizeOverrides = null) {
+  if (isStateMachineProfile() && !isFreeGraph()) {
+    return layoutStateMachineGraph(graph, sizeOverrides);
+  }
   return isFreeGraph()
     ? layoutFreeGraph(graph, sizeOverrides)
     : layoutFixedGraph(graph, sizeOverrides);
+}
+
+function layoutStateMachineGraph(graph, sizeOverrides = null) {
+  const ordered = [...graph.nodes].sort((left, right) => {
+    const depthDelta = getStateParentDepth(left, graph) - getStateParentDepth(right, graph);
+    if (depthDelta !== 0) {
+      return depthDelta;
+    }
+    const orderDelta = Number(left.value?.order || 0) - Number(right.value?.order || 0);
+    return orderDelta !== 0 ? orderDelta : left.key.localeCompare(right.key, 'en', { numeric: true });
+  });
+  const startNode = {
+    key: START_NODE_KEY,
+    id: getGraphLabel('startKind', '初始'),
+    collection: '__virtual__',
+    title: getGraphLabel('startKind', '初始'),
+    text: '',
+    value: null,
+    virtual: 'start'
+  };
+  const displayNodes = graph.entry ? [startNode, ...ordered] : ordered;
+  const sizes = new Map(displayNodes.map((node) => [
+    node.key,
+    node.key === START_NODE_KEY ? { width: 76, height: 76 } : getGraphNodeSize(node, graph, sizeOverrides)
+  ]));
+  const positions = new Map();
+  const rowGroups = new Map();
+  ordered.forEach((node) => {
+    const depth = getStateParentDepth(node, graph);
+    const row = rowGroups.get(depth) || [];
+    row.push(node);
+    rowGroups.set(depth, row);
+  });
+
+  const orderedIndex = new Map(ordered.map((node, index) => [node.key, index]));
+  const stateDepth = new Map(ordered.map((node) => [node.key, getStateParentDepth(node, graph)]));
+  const returnLaneCount = graph.edges.filter((edge) => (
+    edge.from !== edge.to
+      && orderedIndex.has(edge.from)
+      && orderedIndex.has(edge.to)
+      && (stateDepth.get(edge.from) !== stateDepth.get(edge.to)
+        || orderedIndex.get(edge.to) <= orderedIndex.get(edge.from))
+  )).length;
+  const margin = 72;
+  const stateStartX = 182;
+  const stateGapX = 138;
+  const stateGapY = 156;
+  const returnLaneGap = 56;
+  const stateTop = 132 + Math.max(0, returnLaneCount - 1) * returnLaneGap;
+  let maxRight = stateStartX;
+  let maxBottom = stateTop;
+  [...rowGroups.entries()].sort(([left], [right]) => left - right).forEach(([depth, nodes]) => {
+    let x = stateStartX;
+    nodes.forEach((node) => {
+      const size = sizes.get(node.key) || { width: GRAPH_NODE_WIDTH, height: GRAPH_NODE_HEIGHT };
+      const parent = node.value?.parent
+        ? graph.nodes.find((candidate) => String(candidate.value?.name || candidate.id) === String(node.value.parent))
+        : null;
+      const parentPosition = parent ? positions.get(parent.key) : null;
+      const parentSize = parent ? sizes.get(parent.key) : null;
+      const preferredX = parentPosition
+        ? parentPosition.x + ((parentSize?.width || GRAPH_NODE_WIDTH) - size.width) / 2
+        : x;
+      const y = stateTop + depth * stateGapY;
+      positions.set(node.key, { x: Math.max(x, preferredX), y });
+      x = Math.max(x, preferredX) + size.width + stateGapX;
+      maxRight = Math.max(maxRight, x - stateGapX);
+      maxBottom = Math.max(maxBottom, y + size.height);
+    });
+  });
+
+  if (graph.entry && positions.has(graph.entry)) {
+    const entry = positions.get(graph.entry);
+    const startSize = sizes.get(START_NODE_KEY) || { width: 76, height: 76 };
+    const entrySize = sizes.get(graph.entry) || { width: GRAPH_NODE_WIDTH, height: GRAPH_NODE_HEIGHT };
+    positions.set(START_NODE_KEY, {
+      x: margin,
+      y: entry.y + (entrySize.height - startSize.height) / 2
+    });
+  }
+
+  const edges = [];
+  if (graph.entry && positions.has(START_NODE_KEY) && positions.has(graph.entry)) {
+    const start = positions.get(START_NODE_KEY);
+    const target = positions.get(graph.entry);
+    const startSize = sizes.get(START_NODE_KEY);
+    const targetSize = sizes.get(graph.entry);
+    const startX = start.x + startSize.width;
+    const startY = start.y + startSize.height / 2;
+    const endX = target.x;
+    const endY = target.y + targetSize.height / 2;
+    const handle = Math.max(44, (endX - startX) * 0.5);
+    edges.push({
+      from: START_NODE_KEY,
+      to: graph.entry,
+      field: 'start',
+      kind: 'start',
+      route: 'entry',
+      label: '',
+      startX,
+      startY,
+      endX,
+      endY,
+      minX: Math.min(startX, endX),
+      maxX: Math.max(startX, endX),
+      path: `M ${startX} ${startY} C ${startX + handle} ${startY}, ${endX - handle} ${endY}, ${endX} ${endY}`
+    });
+  }
+
+  const returnEdges = graph.edges
+    .filter((edge) => {
+      if (edge.from === edge.to) {
+        return false;
+      }
+      const from = positions.get(edge.from);
+      const to = positions.get(edge.to);
+      return from && to && !(to.x > from.x && Math.abs(to.y - from.y) < stateGapY / 2);
+    })
+    .sort((left, right) => {
+      const leftSpan = Math.abs((positions.get(left.from)?.x || 0) - (positions.get(left.to)?.x || 0));
+      const rightSpan = Math.abs((positions.get(right.from)?.x || 0) - (positions.get(right.to)?.x || 0));
+      return leftSpan - rightSpan;
+    });
+  const returnLanes = new Map(returnEdges.map((edge, index) => [edge, index]));
+  let selfLane = 0;
+  let routeMaxRight = maxRight;
+  graph.edges.forEach((edge) => {
+    const from = positions.get(edge.from);
+    const to = positions.get(edge.to);
+    if (!from || !to) {
+      return;
+    }
+    const fromSize = sizes.get(edge.from) || { width: GRAPH_NODE_WIDTH, height: GRAPH_NODE_HEIGHT };
+    const toSize = sizes.get(edge.to) || { width: GRAPH_NODE_WIDTH, height: GRAPH_NODE_HEIGHT };
+    const self = edge.from === edge.to;
+    const forward = !self && to.x > from.x && Math.abs(to.y - from.y) < stateGapY / 2;
+    let startX;
+    let startY;
+    let endX;
+    let endY;
+    let labelX;
+    let labelY;
+    let path;
+    let route;
+    let label = edge.label;
+    if (self) {
+      startX = from.x + fromSize.width;
+      startY = from.y + fromSize.height * 0.32;
+      endX = startX;
+      endY = from.y + fromSize.height * 0.72;
+      const laneX = startX + 62 + selfLane * 34;
+      selfLane += 1;
+      labelX = laneX + 4;
+      labelY = (startY + endY) / 2 - 6;
+      path = `M ${startX} ${startY} C ${laneX} ${startY}, ${laneX} ${endY}, ${endX} ${endY}`;
+      route = 'self';
+      label = prefixStateMachineEdgeLabel(label, '↻');
+      routeMaxRight = Math.max(routeMaxRight, laneX + 110);
+    } else if (forward) {
+      startX = from.x + fromSize.width;
+      startY = from.y + fromSize.height / 2;
+      endX = to.x;
+      endY = to.y + toSize.height / 2;
+      const middleX = (startX + endX) / 2;
+      labelX = (startX + endX) / 2;
+      labelY = Math.min(startY, endY) - 30;
+      path = `M ${startX} ${startY} C ${middleX} ${startY}, ${middleX} ${endY}, ${endX} ${endY}`;
+      route = 'forward';
+    } else {
+      startX = from.x + fromSize.width / 2;
+      startY = from.y;
+      endX = to.x + toSize.width / 2;
+      endY = to.y;
+      const lane = returnLanes.get(edge) || 0;
+      const laneY = stateTop - 62 - lane * returnLaneGap;
+      const direction = endX < startX ? -1 : 1;
+      const corner = 12;
+      labelX = (startX + endX) / 2;
+      labelY = laneY - 24;
+      path = [
+        `M ${startX} ${startY}`,
+        `L ${startX} ${laneY + corner}`,
+        `Q ${startX} ${laneY} ${startX + direction * corner} ${laneY}`,
+        `L ${endX - direction * corner} ${laneY}`,
+        `Q ${endX} ${laneY} ${endX} ${laneY + corner}`,
+        `L ${endX} ${endY}`
+      ].join(' ');
+      route = 'return';
+      label = prefixStateMachineEdgeLabel(label, '↩');
+    }
+    edges.push({
+      ...edge,
+      route,
+      label,
+      startX,
+      startY,
+      endX,
+      endY,
+      labelX,
+      labelY,
+      minX: Math.min(startX, endX),
+      maxX: Math.max(startX, endX),
+      path
+    });
+  });
+
+  return {
+    nodes: displayNodes,
+    positions,
+    sizes,
+    edges,
+    width: Math.max(980, routeMaxRight + margin),
+    height: Math.max(680, maxBottom + margin)
+  };
+}
+
+function prefixStateMachineEdgeLabel(label, prefix) {
+  const lines = String(label || '').split('\n');
+  lines[0] = `${prefix} ${lines[0] || '转换'}`;
+  return lines.join('\n');
+}
+
+function getStateParentDepth(node, graph) {
+  let depth = 0;
+  let parent = String(node?.value?.parent || '').trim();
+  const visited = new Set();
+  while (parent && !visited.has(parent)) {
+    visited.add(parent);
+    const parentNode = graph.nodes.find((candidate) => (
+      String(candidate.value?.name || candidate.id) === parent
+    ));
+    if (!parentNode) {
+      break;
+    }
+    depth += 1;
+    parent = String(parentNode.value?.parent || '').trim();
+  }
+  return depth;
 }
 
 function layoutFixedGraph(graph, sizeOverrides = null) {
@@ -2353,6 +3651,10 @@ function getGraphLayoutMode() {
     return 'free';
   }
   return 'fixed';
+}
+
+function getGraphAlgorithm() {
+  return String(state.domain?.graph?.algorithm || '').trim().toLowerCase();
 }
 
 function isFreeGraph() {
