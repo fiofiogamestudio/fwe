@@ -12,7 +12,7 @@ npm test
 node bin/fwe.js --explain flow --app examples/app.fwe.json
 ```
 
-`start.bat` is the canonical Windows launcher. It serves the bundled example app and opens the browser automatically. `npm start` provides the same behavior. Pass `--no-open` or set `FWE_NO_BROWSER=1` when you only want the server. If the same app is already running, fwe reuses it; if the port belongs to another app or service, fwe stops with an explicit error instead of opening the wrong page.
+`start.bat` is the canonical Windows launcher. It serves the bundled example app and opens the browser automatically. `npm start` provides the same behavior. Pass `--no-open` or set `FWE_NO_BROWSER=1` when you only want the server. If the same app revision is already running, fwe reuses it. If app, domain, extension, or runtime files changed, fwe rejects the outdated server with an explicit restart message instead of mixing old server state with new browser files. A port owned by another app or service is rejected as well.
 
 ## Project Layout
 
@@ -21,7 +21,7 @@ node bin/fwe.js --explain flow --app examples/app.fwe.json
 | `start.bat` | canonical Windows launcher for the bundled example app |
 | `bin/fwe.js` | CLI entry point |
 | `src/` | server, source loading, DSL compilation, and extension loading |
-| `public/runtime.js` | browser registry API for views, forms, slots, and workbench layouts |
+| `public/runtime.js` | browser registry API for views, forms, slots, workbench layouts, and reusable controls |
 | `public/app.js` | app shell, file operations, history, workbench, validation, and shared helpers |
 | `public/graph.js` | fixed graph, free graph, route-lane/tree layout, and blueprint rendering |
 | `public/inspector.js` | inspector form rendering and JSON mode |
@@ -57,6 +57,20 @@ The canonical names are `source`, `model`, `view`, `form`, `modes`, `layout`, an
   "title": "fwe Example",
   "workspace": "./workspace",
   "port": 3219,
+  "navigation": {
+    "defaultWorkspace": "authoring",
+    "defaultSection": "items",
+    "workspaces": [
+      {
+        "id": "authoring",
+        "label": "Authoring",
+        "sections": [
+          { "id": "items", "label": "Items", "domain": "items", "collection": "items", "hideFile": true },
+          { "id": "flow", "label": "Flow", "domain": "flow" }
+        ]
+      }
+    ]
+  },
   "domains": [
     "./domains/items.fwe",
     "./domains/flow.fwe"
@@ -174,6 +188,8 @@ State-machine domains can use `profile state-machine`. The renderer keeps author
 
 For built-in JSON sources, a root-level optional string `alias` is displayed after the file name as `file.json（alias）`. The file path and authored IDs remain stable, so aliases can be changed without breaking references.
 
+JSON graph domains may use `nodeViews` to give each node collection its own badge, title, body, and labeled detail rows. A grid graph may also declare `derivedEdges.type: "orthogonal-grid"`; FWE then connects Manhattan-adjacent positions unless an explicit configured link list is present. These options change presentation and edge discovery only; node data remains owned by the host domain.
+
 ## Workbench
 
 Use `workbench` when one domain needs multiple collections, shared search, item forms, previews, references, or a custom workspace-like composition.
@@ -224,6 +240,36 @@ view workbench {
 ```
 
 `layout` controls the whole workbench shape. `default` controls the initial workbench state. `list` controls how one collection list is shown. `modes` controls the selected item editor.
+
+Large JSON Workbench definitions may declare ordered `collectionGroups` and assign each collection with `group`. The catalog renders a compact group/collection navigator; Workbenches without groups keep the original single-level tabs.
+
+Catalog collections can declare reusable multi-select filters. Filters combine with AND, while selected options inside one filter combine with OR. Clearing one filter intentionally shows no rows. Options may compare directly against an item field or declare a relation through an option-owned member list:
+
+```json
+{
+  "id": "records",
+  "path": "records",
+  "filters": [
+    {
+      "id": "pool",
+      "label": "Pool",
+      "itemValue": "id",
+      "options": {
+        "path": "metadata.pools",
+        "value": "id",
+        "label": "name",
+        "count": "memberCount",
+        "members": "memberIds",
+        "defaultWhen": ["primary"]
+      }
+    }
+  ]
+}
+```
+
+`navigation` is optional. When present, the shell renders a persistent desktop workspace/section sidebar and equivalent narrow-layout selectors instead of the technical domain selector. A section targets one domain and may target one workbench collection; collection targets hide the workbench's duplicate collection tabs. `hideFile` removes an implementation-only singleton file selector while preserving the underlying file resource. Workspace and section IDs must be unique, and every referenced domain and collection is validated during `--check`.
+
+Without `members`, set `itemPath` to the scalar or array field matched against option values. `default` accepts `"all"`, `"none"`, or an explicit value array. When `default` is omitted, options matching any `defaultWhen` field are selected; if none are marked, all options are selected. Filter state is reset when a resource changes, and deep links automatically reveal their target through configured relational filters.
 
 Compatibility input is still accepted: old `view browser` maps to `view workbench { layout catalog }`, old `view sidepanel` maps to `view workbench { layout panels }`, old collection `layouts` maps to `list`, and old `defaultCollection/defaultList/defaultMode` maps to `default { collection/list/mode }`.
 
@@ -343,21 +389,96 @@ module.exports = (fwe) => {
 };
 ```
 
-Return `true` or omit the return value after handling a request. Return `false` to try the next matching parent prefix and then fwe's normal 404 response. More specific prefixes run first; duplicate prefixes and fwe's reserved `/api/app`, `/api/domains`, and `/api/extensions` routes are rejected. API extensions run in the server process and are trusted code; keep game-specific paths and persistence rules in the host repository.
+Every successful read carries an opaque revision token. Built-in sources derive it from the physical content, and FWE derives one for custom sources that omit it. The browser returns that revision on save; a stale write receives HTTP `409` with a `revision-conflict` issue instead of overwriting an external change. Custom sources may return their own revision when host semantics need a different comparison boundary.
+
+Built-in JSON, text, and multi-file writes prepare temporary files before replacing targets and roll back already-replaced targets if a later replacement fails. A custom source remains responsible for its own aggregate host transaction because only the host knows which physical resources belong to one logical save.
+
+### Reusable Browser Controls
+
+Custom views should use FWE controls for interaction patterns that are not domain-specific. The multi-select control owns its popup, grouping, counts, select-all/clear actions, outside-click and Escape handling, and change events. The host supplies only labels, items, selected values, and domain behavior:
+
+```js
+const filter = window.fwe.ui.createMultiSelect({
+  id: 'kindFilter',
+  placeholder: '类型',
+  selectAllLabel: '全选',
+  clearLabel: '清空',
+  items: [
+    { value: 'buff', label: 'Buff', group: '战斗', count: 12 },
+    { value: 'item', label: '道具', group: '奖励', count: 8 }
+  ],
+  selected: ['buff']
+});
+filter.addEventListener('change', (event) => applyKinds(event.detail.values));
+host.append(filter);
+```
+
+Use `configure(...)` for non-emitting model updates, `value` or `setValue(...)` for selection, `selectAll()` / `clear()` for commands, and `open` / `close()` for popup state. Set `--fwe-multi-select-width`, `--fwe-multi-select-menu-width`, and `--fwe-multi-select-menu-max-height` on the returned element when a host layout needs different dimensions. Keep option discovery and filtering semantics in the host extension.
+
+Workbench references should use FWE resource links instead of assembling app URLs in host code. The helper preserves the current domain, file, and browser session, writes a stable collection/item deep link, and opens a new tab by default:
+
+```js
+const link = ctx.createResourceLink({
+  label: 'Guard (guard)',
+  title: 'Open Buff: Guard',
+  presentation: 'icon',
+  collectionId: 'buffs',
+  itemId: 'guard',
+  mode: 'overview'
+});
+host.append(link);
+```
+
+Use `presentation: 'icon'` for a compact icon-only control. Its `label` or `title` becomes the accessible name and hover tooltip; the host should render the readable resource name as ordinary text beside it. Omitting `presentation` retains a normal text link. The same API is available as `window.fwe.ui.createResourceLink(...)`. Use `window.fwe.navigation.href(...)` when only the URL is needed, `navigate(...)` for same-page navigation, `open(...)` for imperative new-tab navigation, and `restore()` to reapply the current URL after a host-driven resource reload. Collection ids, labels, and reference discovery remain host-domain configuration; FWE owns only routing and link behavior.
+
+Source entries and `read` / `write` / `create` results may include an opaque `meta` object. FWE preserves it without interpreting host semantics. Browser extensions can observe resource state through:
+
+```js
+window.fwe.resources.current();
+await window.fwe.resources.saveCurrent();
+await window.fwe.resources.reloadCurrent();
+await window.fwe.resources.refresh();
+window.fwe.session.id;
+window.fwe.session.handoff;
+window.fwe.session.headers({ 'Content-Type': 'application/json' });
+```
+
+The shell dispatches `fwe:resources-listed`, `fwe:resource-opened`, `fwe:resource-saved`, `fwe:resource-cleared`, and `fwe:selection-changed` events. Resource snapshots include file metadata, dirty state, and a structured selection with `domainId`, `fileName`, and `key` plus workbench `collectionId`, `collectionPath`, and `itemId` when available. Host extensions should use this lifecycle for provenance, source-control, or adjacent resource UX while leaving their domain rules outside FWE core.
+
+Core API requests automatically send the page's `X-FWE-Session` value. Source-provider contexts and server API-extension handlers receive it as `sessionId`; custom browser fetches must merge `window.fwe.session.headers(...)` into their request headers. The ID survives reloads in one browser session but does not make mutable host state process-global. A resource link marks the destination page's session as `handoff: true`, allowing host extensions to retain server-side context instead of replacing it with empty tab-local state. Headerless tools retain the `default` compatibility session.
+
+Return `true` or omit the return value after handling a request. Return `false` to try the next matching parent prefix and then fwe's normal 404 response. More specific prefixes run first; duplicate prefixes and fwe's reserved `/api/app`, `/api/domains`, and `/api/extensions` routes are rejected. `sendText(status, text, contentType)` accepts an explicit MIME type for scripts and styles. API extensions run in the server process and are trusted code; keep game-specific paths and persistence rules in the host repository.
 
 ## Tests
 
 ```powershell
 npm test
 npm run test:browser
+npm run test:all
 npm run pack:dry
 ```
 
-`npm test` runs syntax, example compilation, and unit tests on Node.js 18 or newer. `test:browser` additionally requires Node.js 22 or newer and a local Chrome or Chromium installation; it checks every example domain for browser errors, layout overflow, and graph add/undo behavior.
+`npm test` runs syntax, example compilation, and unit tests on Node.js 18 or newer. `test:browser` additionally requires Node.js 22 or newer and a local Chrome or Chromium installation; it checks every example domain for browser errors, layout overflow, and graph add/undo behavior. `test:all` runs both suites and verifies the published package contents.
 
 For a focused custom-form probe, `browser-smoke.js` accepts `--domain`, `--file`, `--collection`, `--item`, and `--expect-selector`. Pair `--mutation-button` with `--mutation-selector` to verify that a visible button increases the selected node count and Undo restores it.
 
 ## Form Extensions
+
+Dynamic select fields can keep stable stored values while presenting readable labels with `optionLabels`:
+
+```json
+{
+  "path": "effect",
+  "type": "select",
+  "optionsFrom": "props.effect.values",
+  "optionLabels": {
+    "shake": "Shake",
+    "wave": "Wave"
+  }
+}
+```
+
+Values not present in `optionLabels` retain their source label, so host-defined extensions remain editable.
 
 Use a form extension when one inspector field needs a special control.
 
@@ -397,7 +518,24 @@ Client extension:
 }());
 ```
 
-Form context includes `field`, `target`, `value`, path helpers, option helpers, `setValue`, `onChange`, and `renderInspector`.
+Form context includes `app`, `domain`, `data`, `file`, `selection`, `context`, `field`, `target`, `value`, path helpers, option helpers, `setValue`, `onChange`, `renderInspector`, `navigation`, and `createResourceLink`. Set a field's `label` to `false` when the extension renders the complete field surface and does not need an outer label.
+
+For a document whose root form should occupy the main editor area instead of the side inspector, use the built-in form view's page presentation:
+
+```json
+{
+  "view": [
+    {
+      "type": "form",
+      "view": "form-json",
+      "presentation": "page",
+      "modes": ["form"]
+    }
+  ]
+}
+```
+
+The page presentation keeps the normal FWE resource bar, history, validation, and save lifecycle. It only changes where the root form is rendered.
 
 ## Compatibility Aliases
 

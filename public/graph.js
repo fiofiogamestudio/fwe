@@ -983,13 +983,13 @@ function addDialogNextNode(nodeId, kind = 0) {
   }
 
   const nodes = getDialogNodes();
-  pushHistory(`从 #${node.id} 添加后续节点`);
+  pushHistory(formatGraphLabel('historyAddNextNode', '从 #{id} 添加后续节点', { id: node.id }));
   const created = createDialogNode(kind, node.actorId || getDefaultDialogActorId(1));
   created.next = Number(created.kind) === 5 ? 0 : (Number(node.next) || 0);
   node.next = created.id;
   nodes.push(created);
   selectDialogGraphNode(state.domain.graph?.nodes || 'nodes', created.id);
-  markDirtyAndRender(`已添加节点 #${created.id}`);
+  markDirtyAndRender(formatGraphLabel('statusAddedNode', '已添加节点 #{id}', { id: created.id }));
 }
 
 function addDialogNextFromOption(optionId, kind = 0) {
@@ -999,13 +999,13 @@ function addDialogNextFromOption(optionId, kind = 0) {
   }
 
   const nodes = getDialogNodes();
-  pushHistory(`从选项 #${option.id} 添加后续节点`);
+  pushHistory(formatGraphLabel('historyAddOptionNextNode', '从选项 #{id} 添加后续节点', { id: option.id }));
   const created = createDialogNode(kind, option.actorId || getDefaultDialogActorId(1));
   created.next = Number(created.kind) === 5 ? 0 : (Number(option.next) || 0);
   option.next = created.id;
   nodes.push(created);
   selectDialogGraphNode(state.domain.graph?.nodes || 'nodes', created.id);
-  markDirtyAndRender(`已添加节点 #${created.id}`);
+  markDirtyAndRender(formatGraphLabel('statusAddedNode', '已添加节点 #{id}', { id: created.id }));
 }
 
 function addDialogBranchNode(nodeId, kind = 0) {
@@ -1016,7 +1016,7 @@ function addDialogBranchNode(nodeId, kind = 0) {
 
   const nodes = getDialogNodes();
   const options = getDialogOptions();
-  pushHistory(`从 #${node.id} 添加分支`);
+  pushHistory(formatGraphLabel('historyAddBranch', '从 #{id} 添加分支', { id: node.id }));
   if (Number(node.kind) === 1) {
     const nextNode = createDialogNode(kind, getDefaultDialogActorId(1));
     const option = createDialogOption(getDefaultDialogActorId(0), nextNode.id);
@@ -1025,7 +1025,7 @@ function addDialogBranchNode(nodeId, kind = 0) {
     node.optionIds = ensureArray(node.optionIds);
     node.optionIds.push(option.id);
     selectDialogGraphNode(state.domain.graph?.options || state.domain.model?.options || 'options', option.id);
-    markDirtyAndRender(`已添加选项 #${option.id}`);
+    markDirtyAndRender(formatGraphLabel('statusAddedOption', '已添加选项 #{id}', { id: option.id }));
     return;
   }
 
@@ -1035,7 +1035,7 @@ function addDialogBranchNode(nodeId, kind = 0) {
     node.fail = failNode.id;
     nodes.push(failNode);
     selectDialogGraphNode(state.domain.graph?.nodes || 'nodes', failNode.id);
-    markDirtyAndRender(`已添加失败节点 #${failNode.id}`);
+    markDirtyAndRender(formatGraphLabel('statusAddedFailNode', '已添加失败节点 #{id}', { id: failNode.id }));
     return;
   }
 
@@ -1045,11 +1045,11 @@ function addDialogBranchNode(nodeId, kind = 0) {
 
 function deleteDialogNode(nodeId) {
   const node = findDialogNode(nodeId);
-  if (!node || !window.confirm(`删除节点 #${nodeId}？`)) {
+  if (!node || !window.confirm(formatGraphLabel('confirmDeleteNode', '删除节点 #{id}？', { id: nodeId }))) {
     return;
   }
 
-  pushHistory(`删除节点 #${nodeId}`);
+  pushHistory(formatGraphLabel('historyDeleteNode', '删除节点 #{id}', { id: nodeId }));
   const fallback = Number(node.next) || Number(node.fail) || 0;
   getDialogNodes().forEach((item) => {
     if (String(item.id) === String(nodeId)) {
@@ -1083,15 +1083,15 @@ function deleteDialogNode(nodeId) {
 
   state.selectedKey = '';
   state.selectedEdge = null;
-  markDirtyAndRender(`已删除节点 #${nodeId}`);
+  markDirtyAndRender(formatGraphLabel('statusDeletedNode', '已删除节点 #{id}', { id: nodeId }));
 }
 
 function deleteDialogOption(optionId) {
-  if (!findDialogOption(optionId) || !window.confirm(`删除选项 #${optionId}？`)) {
+  if (!findDialogOption(optionId) || !window.confirm(formatGraphLabel('confirmDeleteOption', '删除选项 #{id}？', { id: optionId }))) {
     return;
   }
 
-  pushHistory(`删除选项 #${optionId}`);
+  pushHistory(formatGraphLabel('historyDeleteOption', '删除选项 #{id}', { id: optionId }));
   const keptOptions = getDialogOptions().filter((option) => String(option.id) !== String(optionId));
   setByPath(state.data, state.domain.graph?.options || state.domain.model?.options || 'options', keptOptions);
   getDialogNodes().forEach((node) => {
@@ -1101,7 +1101,7 @@ function deleteDialogOption(optionId) {
   });
   state.selectedKey = '';
   state.selectedEdge = null;
-  markDirtyAndRender(`已删除选项 #${optionId}`);
+  markDirtyAndRender(formatGraphLabel('statusDeletedOption', '已删除选项 #{id}', { id: optionId }));
 }
 
 function renderGraph() {
@@ -2113,6 +2113,8 @@ function buildGraphModel() {
     }
   }
 
+  appendDerivedGraphEdges(config, nodes, nodeMap, baseCollection, edges);
+
   nodes.forEach((node) => {
     node.outgoing = edges.filter((edge) => edge.from === node.key);
     node.incoming = edges.filter((edge) => edge.to === node.key);
@@ -2127,6 +2129,100 @@ function buildGraphModel() {
     maxDepth: 1,
     maxRows: 1
   };
+}
+
+function appendDerivedGraphEdges(config, nodes, nodeMap, baseCollection, edges) {
+  const derived = config?.derivedEdges;
+  const type = String(derived?.type || derived?.kind || '').trim().toLowerCase();
+  if (type !== 'orthogonal-grid') {
+    return;
+  }
+
+  const baseNodes = nodes.filter((node) => node.collection === baseCollection);
+  const knownPairs = new Set(edges.map((edge) => graphNodePairKey(edge.from, edge.to)));
+  const links = ensureArray(getByPath(state.data, derived.links || ''));
+  if (links.length > 0) {
+    const fromPath = derived.from || 'from';
+    const toPath = derived.to || 'to';
+    links.forEach((link) => {
+      appendDerivedGraphEdge(
+        String(getByPath(link, fromPath) ?? ''),
+        String(getByPath(link, toPath) ?? ''),
+        derived,
+        baseCollection,
+        nodeMap,
+        edges,
+        knownPairs
+      );
+    });
+    return;
+  }
+
+  const position = derived.position || config.position || { x: 'x', y: 'y' };
+  for (let leftIndex = 0; leftIndex < baseNodes.length; leftIndex += 1) {
+    const left = baseNodes[leftIndex];
+    const leftPoint = getDerivedGridPoint(left.value, position);
+    if (!leftPoint) continue;
+    for (let rightIndex = leftIndex + 1; rightIndex < baseNodes.length; rightIndex += 1) {
+      const right = baseNodes[rightIndex];
+      const rightPoint = getDerivedGridPoint(right.value, position);
+      if (!rightPoint || Math.abs(leftPoint.x - rightPoint.x) + Math.abs(leftPoint.y - rightPoint.y) !== 1) {
+        continue;
+      }
+      appendDerivedGraphEdge(
+        left.id,
+        right.id,
+        derived,
+        baseCollection,
+        nodeMap,
+        edges,
+        knownPairs
+      );
+    }
+  }
+}
+
+function getDerivedGridPoint(value, position) {
+  const xPath = position && typeof position === 'object' && !Array.isArray(position) ? (position.x || 'x') : `${position}.x`;
+  const yPath = position && typeof position === 'object' && !Array.isArray(position) ? (position.y || 'y') : `${position}.y`;
+  const x = Number(getByPath(value, xPath));
+  const y = Number(getByPath(value, yPath));
+  return Number.isInteger(x) && Number.isInteger(y) ? { x, y } : null;
+}
+
+function appendDerivedGraphEdge(fromId, toId, derived, baseCollection, nodeMap, edges, knownPairs) {
+  if (!fromId || !toId || fromId === toId) {
+    return;
+  }
+  const from = `${baseCollection}:${fromId}`;
+  const to = `${baseCollection}:${toId}`;
+  const sourceNode = nodeMap.get(from);
+  const targetNode = nodeMap.get(to);
+  const pairKey = graphNodePairKey(from, to);
+  if (!sourceNode || !targetNode || knownPairs.has(pairKey)) {
+    return;
+  }
+  knownPairs.add(pairKey);
+  edges.push({
+    from,
+    to,
+    sourceCollection: baseCollection,
+    targetCollection: baseCollection,
+    field: '__derived',
+    kind: derived.edgeKind || derived.kind || 'grid',
+    color: derived.color || '',
+    tone: derived.tone || '',
+    label: derived.label || '',
+    rule: 'derived:orthogonal-grid',
+    sourceValue: sourceNode.value,
+    targetValue: targetNode.value,
+    sourceNode,
+    targetNode
+  });
+}
+
+function graphNodePairKey(left, right) {
+  return String(left) < String(right) ? `${left}\n${right}` : `${right}\n${left}`;
 }
 
 function parseEdgeRule(raw) {
@@ -2222,6 +2318,10 @@ function getGraphCollectionIdKey(collection) {
 
 function getGraphLabel(key, fallback) {
   return state.domain?.graph?.labels?.[key] ?? fallback;
+}
+
+function formatGraphLabel(key, fallback, values = {}) {
+  return String(getGraphLabel(key, fallback)).replace(/\{([^}]+)\}/g, (_, name) => values[name] ?? '');
 }
 
 function getGraphKindLabel(kind) {
@@ -2490,11 +2590,15 @@ function formatStateMachineViewState(value) {
 }
 
 function hasConfiguredGraphNodeView() {
-  return !!state.domain?.graph?.nodeView && !isDialogGraphProfile();
+  return !!(state.domain?.graph?.nodeView || state.domain?.graph?.nodeViews) && !isDialogGraphProfile();
 }
 
 function buildConfiguredGraphNodeView(node, graph) {
-  const config = state.domain?.graph?.nodeView || {};
+  const configuredViews = state.domain?.graph?.nodeViews || {};
+  const config = configuredViews[node.collection]
+    || configuredViews[singular(node.collection)]
+    || state.domain?.graph?.nodeView
+    || {};
   const detailPaths = ensureArray(config.details, { scalar: true });
   const detailLines = detailPaths
     .map((pathText) => formatConfiguredGraphDetail(node, graph, pathText))
@@ -2503,13 +2607,16 @@ function buildConfiguredGraphNodeView(node, graph) {
     kindLabel: formatConfiguredGraphValue(node, graph, config.badge, getGraphLabel('nodeKind', '节点'), { kindLabel: true }),
     actorName: formatConfiguredGraphValue(node, graph, config.title, node.title || node.id),
     faceText: '',
-    text: formatConfiguredGraphValue(node, graph, config.body, node.text || ''),
+    text: formatConfiguredGraphValue(node, graph, config.body, ''),
     detailLines
   };
 }
 
-function formatConfiguredGraphDetail(node, graph, pathText) {
-  const text = String(pathText || '').trim();
+function formatConfiguredGraphDetail(node, graph, detailSpec) {
+  const configured = detailSpec && typeof detailSpec === 'object' && !Array.isArray(detailSpec)
+    ? detailSpec
+    : { path: detailSpec };
+  const text = String(configured.path || configured.value || '').trim();
   if (!text) {
     return '';
   }
@@ -2517,7 +2624,7 @@ function formatConfiguredGraphDetail(node, graph, pathText) {
   if (value === undefined || value === null || value === '' || (Array.isArray(value) && !value.length)) {
     return '';
   }
-  const label = formatGraphDetailLabel(text);
+  const label = configured.label || formatGraphDetailLabel(text, node);
   const detailValue = formatGraphDetailValue(value);
   if (isGraphEdgeField(node, text)) {
     return `${label} -> #${detailValue}`;
@@ -2572,8 +2679,8 @@ function isGraphEdgeField(node, pathText) {
   return !!node.outgoing?.some((item) => item.field === pathText || item.kind === pathText);
 }
 
-function formatGraphDetailLabel(pathText) {
-  const formLabel = getGraphNodeFormLabel(pathText);
+function formatGraphDetailLabel(pathText, node = null) {
+  const formLabel = getGraphNodeFormLabel(pathText, node);
   if (formLabel) {
     return formLabel;
   }
@@ -2590,13 +2697,17 @@ function formatGraphDetailLabel(pathText) {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-function getGraphNodeFormLabel(pathText) {
+function getGraphNodeFormLabel(pathText, node = null) {
   const targetPath = String(pathText || '').trim();
   if (!targetPath) {
     return '';
   }
 
-  const graphNodeForm = state.domain?.inspector?.forms?.graphNode;
+  const forms = state.domain?.inspector?.forms || {};
+  const kind = node?.value?.[state.domain?.graph?.nodeKind || 'kind'];
+  const graphNodeForm = (node && forms[`${node.collection}:${kind}`])
+    || (node && forms[node.collection])
+    || forms.graphNode;
   const fields = ensureArray(graphNodeForm?.groups).flatMap((group) => ensureArray(group?.fields));
   const directField = fields.find((field) => field?.path === targetPath);
   if (directField?.label) {
@@ -3647,7 +3758,7 @@ function maxGraphExtent(positions, sizes, key) {
 
 function getGraphLayoutMode() {
   const raw = String(state.domain?.graph?.layout || 'fixed').trim().toLowerCase();
-  if (raw === 'free' || raw === 'movable' || raw === 'blueprint') {
+  if (raw === 'free' || raw === 'movable' || raw === 'blueprint' || raw === 'grid') {
     return 'free';
   }
   return 'fixed';

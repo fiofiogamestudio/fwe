@@ -13,8 +13,14 @@ const state = {
     collectionId: '',
     listLayout: 'detail',
     search: '',
+    filterValues: {},
     mode: 'overview',
     variant: ''
+  },
+  appNavigation: {
+    workspaceId: '',
+    sectionId: '',
+    sectionByWorkspace: {}
   },
   view: {
     scale: 1,
@@ -43,6 +49,17 @@ const state = {
   selectionVersion: 0,
   fileOpenVersion: 0
 };
+let lastSelectionSignature = '';
+let managedNavigationQueue = Promise.resolve();
+
+const FWE_NAVIGATION_QUERY = Object.freeze({
+  domainId: 'fweDomain',
+  fileName: 'fweFile',
+  collectionId: 'fweCollection',
+  itemId: 'fweItem',
+  mode: 'fweMode',
+  sessionId: 'fweSession'
+});
 
 const DEFAULT_LABELS = {
   open: '打开',
@@ -59,6 +76,9 @@ const DEFAULT_LABELS = {
   apply: '应用',
   revert: '还原',
   search: '搜索',
+  selectAll: '全选',
+  clear: '清空',
+  noFilterOptions: '没有可用选项',
   detail: '详情',
   grid: '网格',
   overview: '概览',
@@ -66,7 +86,10 @@ const DEFAULT_LABELS = {
   preview: '预览',
   references: '引用',
   diagnostics: '诊断',
+  workspace: '工作区',
+  section: '内容',
   domain: '数据域',
+  file: '文件',
   metaButton: '元数据',
   more: '更多',
   reset: '重置',
@@ -76,6 +99,7 @@ const DEFAULT_LABELS = {
   createdDraft: '已创建草稿',
   noFileSelected: '未选择文件',
   noFileToSave: '没有可保存的文件',
+  fileAlreadyExists: '文件已存在：{name}',
   newDisabled: '当前数据域不允许新建文件',
   newFileName: '新文件名',
   openOrCreateFile: '打开或新建一个文件。',
@@ -95,6 +119,9 @@ const DEFAULT_LABELS = {
   fields: '字段',
   items: '条目',
   item: '条目',
+  collectionGroups: '内容分类',
+  collections: '内容类型',
+  other: '其他',
   object: '对象',
   variant: '变体',
   up: '上移',
@@ -114,7 +141,55 @@ const DEFAULT_LABELS = {
   newFieldName: '新字段名',
   loadScriptFailed: '加载失败：{label}',
   deleteSelectionConfirm: '删除 {path}？',
-  referencedBy: '被以下位置引用：'
+  referencedBy: '被以下位置引用：',
+  inspectorModes: '检查器模式',
+  collectionLayouts: '集合布局',
+  collectionModes: '编辑模式',
+  collectionVariants: '内容变体',
+  sidepanelSections: '侧栏内容',
+  sidepanelModes: '编辑模式',
+  noSidepanelTabs: '没有配置侧栏页签。',
+  noEditorConfigured: '没有配置编辑器。',
+  markup: '标记',
+  markupAlreadyApplied: '当前选区已经套用了 {tagId}。',
+  markupNestedUnsupported: '文本标记不支持嵌套，请先选中纯文本内容。',
+  historyEditText: '编辑文本',
+  historyRedoPoint: '重做点',
+  historyUndoPoint: '撤销点',
+  historyAddPath: '添加 {path}',
+  historyDuplicatePath: '复制 {path}',
+  historyDeletePath: '删除 {path}',
+  statusAddedPath: '已添加 {path}',
+  statusDuplicatedPath: '已复制 {path}',
+  statusDeletedPath: '已删除 {path}',
+  serverValidationFailed: '服务端校验失败',
+  blueprintNodeType: '节点类型',
+  blueprintNodeGroup: '节点',
+  blueprintInputGroup: '输入值',
+  blueprintNoEditableInputs: '没有可编辑输入值',
+  blueprintPositionGroup: '位置',
+  diagnosticBlueprintDuplicateNodeId: '节点 id 重复: {id}',
+  diagnosticBlueprintUnknownNodeType: '未知蓝图节点类型: {type}',
+  diagnosticBlueprintInvalidPosition: '蓝图节点坐标必须是整数: #{id}',
+  diagnosticBlueprintMissingSourceNode: '连线来源节点不存在: {node}',
+  diagnosticBlueprintMissingTargetNode: '连线目标节点不存在: {node}',
+  diagnosticBlueprintMissingSourcePort: '来源输出端口不存在: #{node}.{port}',
+  diagnosticBlueprintMissingTargetPort: '目标输入端口不存在: #{node}.{port}',
+  diagnosticBlueprintIncompatiblePorts: '端口类型不兼容: {source} -> {target}',
+  diagnosticBlueprintInputSingle: '输入端口只能连接一次: #{node}.{port}',
+  diagnosticBlueprintOutputSingle: '输出端口只能连接一次: #{node}.{port}',
+  diagnosticRequired: '必填：{path}',
+  diagnosticExpectedType: '{path} 应为 {expected}',
+  diagnosticExpectedArray: '应为数组：{path}',
+  diagnosticInvalidValue: '无效取值 {path}: {value}',
+  diagnosticOutOfRange: '超出范围 {path}: {value}',
+  diagnosticPatternMismatch: '格式不匹配 {path}',
+  diagnosticInvalidLength: '长度不合法 {path}: {length}',
+  diagnosticInvalidItemCount: '条目数量不合法 {path}: {length}',
+  diagnosticMissingReference: '引用不存在 {path}: {value}',
+  diagnosticDuplicateValue: '重复值 {path}: {value}',
+  diagnosticMissingReferenceTarget: '引用不存在 {path} -> {target}: {value}',
+  diagnosticDanglingEdge: '连线目标不存在 {from} -> {to}'
 };
 
 const DEFAULT_GRAPH_GRID = 10;
@@ -167,6 +242,9 @@ const BUILT_IN_VIEW_MODULES = [
   './views/text.js'
 ];
 
+const fweSession = createBrowserSession();
+const initialNavigationTarget = readNavigationTarget();
+
 const fweRuntime = window.createFweRuntime({
   context: () => createViewContext(resolveDomainView(state.domain).spec)
 });
@@ -178,13 +256,41 @@ const {
 const { normalizeWorkbenchLayoutId } = fweRuntime;
 window.fwe = fweRuntime;
 window.fweRuntime = fweRuntime;
+fweRuntime.session = fweSession;
+fweRuntime.resources = {
+  current: () => currentResourceSnapshot(),
+  saveCurrent: () => saveFile({ force: true }),
+  reloadCurrent: () => openSelectedFile({ skipDirtyCheck: true }),
+  refresh: () => refreshCurrentResource()
+};
+fweRuntime.navigation = {
+  current: () => currentNavigationTarget(),
+  href: (target = {}) => buildNavigationHref(target),
+  navigate: (target = {}, options = {}) => navigateToResource(target, options),
+  open: (target = {}, options = {}) => openNavigationTarget(target, options),
+  restore: () => navigateToResource(readNavigationTarget(), { skipDirtyCheck: true })
+};
 
 const appTitle = document.querySelector('#appTitle');
 const statusText = document.querySelector('#statusText');
+const appRoot = document.querySelector('.app');
 const workspace = document.querySelector('.workspace');
 const groupSelect = document.querySelector('#groupSelect');
+const managedNavigation = document.querySelector('#managedNavigation');
+const managedSidebar = document.querySelector('#managedSidebar');
+const managedWorkspaceTabs = document.querySelector('#managedWorkspaceTabs');
+const managedSidebarTitle = document.querySelector('#managedSidebarTitle');
+const managedSectionList = document.querySelector('#managedSectionList');
+const technicalNavigation = document.querySelector('#technicalNavigation');
+const workspaceSelect = document.querySelector('#workspaceSelect');
+const sectionSelect = document.querySelector('#sectionSelect');
+const workspaceSelectLabel = document.querySelector('#workspaceSelectLabel');
+const sectionSelectLabel = document.querySelector('#sectionSelectLabel');
 const domainSelect = document.querySelector('#domainSelect');
+const domainSelectLabel = document.querySelector('#domainSelectLabel');
 const fileSelect = document.querySelector('#fileSelect');
+const fileSelectLabel = document.querySelector('#fileSelectLabel');
+const fileSelectorField = document.querySelector('#fileSelectorField');
 const surfaceHeader = document.querySelector('#surfaceHeader');
 const surfaceTitle = document.querySelector('#surfaceTitle');
 const surfaceSelection = document.querySelector('#surfaceSelection');
@@ -224,6 +330,7 @@ const tableBody = document.querySelector('#tableBody');
 const collectionWorkbench = document.querySelector('#collectionWorkbench');
 const collectionTabs = document.querySelector('#collectionTabs');
 const collectionSearch = document.querySelector('#collectionSearch');
+const collectionFilters = document.querySelector('#collectionFilters');
 const collectionLayoutTabs = document.querySelector('#collectionLayoutTabs');
 const collectionDetailButton = document.querySelector('#collectionDetailButton');
 const collectionGridButton = document.querySelector('#collectionGridButton');
@@ -352,6 +459,9 @@ document.addEventListener('click', (event) => {
   }
 });
 document.addEventListener('keydown', (event) => {
+  if (handleTabListKeydown(event)) {
+    return;
+  }
   if (event.key === 'Escape') {
     closeCommandMenu(resourceMenu, resourceMoreButton);
     closeCommandMenu(surfaceMenu, surfaceMoreButton);
@@ -373,6 +483,28 @@ jsonRevertButton.addEventListener('click', () => {
   renderInspector();
   updateActionButtons();
 });
+
+workspaceSelect.addEventListener('change', async () => {
+  const workspaceConfig = getManagedWorkspaces().find((item) => item.id === workspaceSelect.value);
+  if (!workspaceConfig) {
+    syncManagedNavigation();
+    return;
+  }
+  const rememberedSectionId = state.appNavigation.sectionByWorkspace[workspaceConfig.id];
+  const section = workspaceConfig.sections.find((item) => item.id === rememberedSectionId)
+    || workspaceConfig.sections[0];
+  await queueManagedSection(workspaceConfig, section);
+});
+
+sectionSelect.addEventListener('change', async () => {
+  const workspaceConfig = getManagedWorkspaces().find((item) => item.id === workspaceSelect.value);
+  const section = workspaceConfig?.sections.find((item) => item.id === sectionSelect.value);
+  if (!workspaceConfig || !section) {
+    syncManagedNavigation();
+    return;
+  }
+  await queueManagedSection(workspaceConfig, section);
+});
 jsonEditor.addEventListener('input', () => {
   if (state.domain?.kind !== 'text') {
     state.jsonDraft = jsonEditor.value;
@@ -389,7 +521,7 @@ textView.addEventListener('input', () => {
   if (state.domain?.kind === 'text') {
     clearServerDiagnostics();
     if (!state.history.textBaseline) {
-      state.history.textBaseline = createHistorySnapshot('编辑文本');
+      state.history.textBaseline = createHistorySnapshot(getAppLabel('historyEditText'));
       pushHistorySnapshot(state.history.textBaseline);
     }
     state.text = textView.value;
@@ -403,7 +535,7 @@ textView.addEventListener('blur', () => {
 });
 collectionSearch.addEventListener('input', () => {
   state.workbench.search = collectionSearch.value.trim().toLowerCase();
-  renderCollectionWorkbench();
+  refreshCollectionFilterResults(getActiveWorkbenchCollection());
 });
 collectionDetailButton.addEventListener('click', () => {
   state.workbench.listLayout = 'detail';
@@ -528,6 +660,12 @@ window.addEventListener('keydown', (event) => {
     redoAction();
   }
 });
+window.addEventListener('beforeunload', (event) => {
+  if (!hasUnsavedChanges()) return;
+  if (navigator.userActivation && !navigator.userActivation.hasBeenActive) return;
+  event.preventDefault();
+  event.returnValue = '';
+});
 
 init().catch((error) => {
   setStatus(error.message, true);
@@ -543,9 +681,19 @@ async function init() {
   applyAppLabels();
   renderGroupSelect();
   const firstDomain = state.app.domains[0];
-  groupSelect.value = getDomainGroup(firstDomain);
-  renderDomainSelect(groupSelect.value);
-  await selectDomain(firstDomain);
+  if (firstDomain) {
+    groupSelect.value = getDomainGroup(firstDomain);
+    renderDomainSelect(groupSelect.value);
+  }
+  const managedTarget = configureManagedNavigation(initialNavigationTarget);
+  const initialTarget = managedTarget || initialNavigationTarget;
+  const initialDomain = state.app.domains.find((domain) => domain.id === initialTarget.domainId)
+    || firstDomain;
+  if (initialDomain) {
+    groupSelect.value = getDomainGroup(initialDomain);
+    renderDomainSelect(groupSelect.value);
+    await selectDomain(initialDomain, { navigation: initialTarget });
+  }
 }
 
 function getDomainGroup(domain) {
@@ -603,6 +751,25 @@ function applyAppLabels() {
   collectionSearch.placeholder = getAppLabel('search');
   collectionDetailButton.textContent = getAppLabel('detail');
   collectionGridButton.textContent = getAppLabel('grid');
+  workspaceSelectLabel.textContent = getAppLabel('workspace');
+  sectionSelectLabel.textContent = getAppLabel('section');
+  domainSelectLabel.textContent = getAppLabel('domain');
+  fileSelectLabel.textContent = getAppLabel('file');
+  workspaceSelect.title = getAppLabel('workspace');
+  workspaceSelect.setAttribute('aria-label', getAppLabel('workspace'));
+  sectionSelect.title = getAppLabel('section');
+  sectionSelect.setAttribute('aria-label', getAppLabel('section'));
+  domainSelect.title = getAppLabel('domain');
+  domainSelect.setAttribute('aria-label', getAppLabel('domain'));
+  fileSelect.title = getAppLabel('file');
+  fileSelect.setAttribute('aria-label', getAppLabel('file'));
+  collectionSearch.setAttribute('aria-label', getAppLabel('search'));
+  document.querySelector('.inspector-mode-tabs')?.setAttribute('aria-label', getAppLabel('inspectorModes'));
+  collectionLayoutTabs.setAttribute('aria-label', getAppLabel('collectionLayouts'));
+  collectionModeTabs.setAttribute('aria-label', getAppLabel('collectionModes'));
+  collectionVariantTabs.setAttribute('aria-label', getAppLabel('collectionVariants'));
+  sidepanelTabs.setAttribute('aria-label', getAppLabel('sidepanelSections'));
+  sidepanelModeTabs.setAttribute('aria-label', getAppLabel('sidepanelModes'));
   resourceMoreButton.title = getAppLabel('more');
   surfaceMoreButton.title = getAppLabel('more');
   viewHudResetButton.textContent = getAppLabel('reset');
@@ -611,6 +778,213 @@ function applyAppLabels() {
 
 function getAppLabel(key, fallback = '') {
   return state.app?.labels?.[key] ?? DEFAULT_LABELS[key] ?? fallback ?? key;
+}
+
+function getManagedWorkspaces() {
+  return Array.isArray(state.app?.navigation?.workspaces)
+    ? state.app.navigation.workspaces
+    : [];
+}
+
+function configureManagedNavigation(initialTarget = {}) {
+  const workspaces = getManagedWorkspaces();
+  const enabled = workspaces.length > 0;
+  appRoot?.classList.toggle('app--managed', enabled);
+  managedNavigation.classList.toggle('hidden', !enabled);
+  managedSidebar?.classList.toggle('hidden', !enabled);
+  technicalNavigation.classList.toggle('hidden', enabled);
+  if (!enabled) {
+    fileSelectorField.hidden = false;
+    managedWorkspaceTabs?.replaceChildren();
+    managedSectionList?.replaceChildren();
+    return null;
+  }
+
+  workspaceSelect.replaceChildren();
+  workspaces.forEach((workspaceConfig) => {
+    const option = document.createElement('option');
+    option.value = workspaceConfig.id;
+    option.textContent = workspaceConfig.label;
+    workspaceSelect.append(option);
+  });
+
+  const normalizedTarget = normalizeNavigationTarget(initialTarget);
+  const matched = findManagedSection(normalizedTarget);
+  const defaultWorkspaceId = state.app.navigation.defaultWorkspaceId || workspaces[0].id;
+  const workspaceConfig = matched?.workspace
+    || workspaces.find((item) => item.id === defaultWorkspaceId)
+    || workspaces[0];
+  const defaultSectionId = workspaceConfig.id === defaultWorkspaceId
+    ? state.app.navigation.defaultSectionId
+    : '';
+  const section = matched?.section
+    || workspaceConfig.sections.find((item) => item.id === defaultSectionId)
+    || workspaceConfig.sections[0];
+
+  setManagedNavigationSelection(workspaceConfig, section);
+  return matched
+    ? { ...managedSectionTarget(section), ...normalizedTarget }
+    : managedSectionTarget(section);
+}
+
+function findManagedSection(target = currentNavigationTarget()) {
+  const navigation = normalizeNavigationTarget(target);
+  if (!navigation.domainId) return null;
+  const candidates = getManagedWorkspaces().flatMap((workspaceConfig) => (
+    workspaceConfig.sections.map((section) => ({ workspace: workspaceConfig, section }))
+  ));
+  if (navigation.collectionId) {
+    const exact = candidates.find(({ section }) => (
+      section.domainId === navigation.domainId && section.collectionId === navigation.collectionId
+    ));
+    if (exact) return exact;
+  }
+  return candidates.find(({ section }) => (
+    section.domainId === navigation.domainId && !section.collectionId
+  )) || candidates.find(({ section }) => section.domainId === navigation.domainId) || null;
+}
+
+function managedSectionTarget(section) {
+  return normalizeNavigationTarget({
+    domainId: section?.domainId,
+    collectionId: section?.collectionId
+  });
+}
+
+function setManagedNavigationSelection(workspaceConfig, section) {
+  if (!workspaceConfig || !section) return;
+  state.appNavigation.workspaceId = workspaceConfig.id;
+  state.appNavigation.sectionId = section.id;
+  state.appNavigation.sectionByWorkspace[workspaceConfig.id] = section.id;
+  workspaceSelect.value = workspaceConfig.id;
+  renderManagedSectionOptions(workspaceConfig);
+  sectionSelect.value = section.id;
+  fileSelectorField.hidden = section.hideFile === true;
+  renderManagedSidebar(workspaceConfig, section);
+}
+
+function renderManagedSidebar(workspaceConfig, activeSection) {
+  if (!managedSidebar || !managedWorkspaceTabs || !managedSectionList || !workspaceConfig || !activeSection) return;
+  managedSidebarTitle.textContent = getAppLabel('section');
+  managedWorkspaceTabs.replaceChildren();
+  getManagedWorkspaces().forEach((item) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = item.label;
+    button.dataset.workspaceId = item.id;
+    button.className = item.id === workspaceConfig.id ? 'is-active' : '';
+    button.setAttribute('role', 'tab');
+    button.setAttribute('aria-selected', String(item.id === workspaceConfig.id));
+    button.addEventListener('click', () => {
+      if (item.id === workspaceConfig.id) return;
+      const rememberedId = state.appNavigation.sectionByWorkspace[item.id];
+      const nextSection = item.sections.find((section) => section.id === rememberedId)
+        || item.sections[0];
+      if (nextSection) queueManagedSection(item, nextSection);
+    });
+    managedWorkspaceTabs.append(button);
+  });
+
+  managedSectionList.replaceChildren();
+  const groupCounts = workspaceConfig.sections.reduce((counts, section) => {
+    if (section.group) counts.set(section.group, (counts.get(section.group) || 0) + 1);
+    return counts;
+  }, new Map());
+  let currentGroup = null;
+  workspaceConfig.sections.forEach((section) => {
+    const group = section.group || '';
+    if (group && group !== currentGroup && groupCounts.get(group) > 1) {
+      const heading = document.createElement('div');
+      heading.className = 'managed-sidebar__group-label';
+      heading.textContent = group;
+      managedSectionList.append(heading);
+    }
+    currentGroup = group;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = section.label;
+    button.dataset.sectionId = section.id;
+    button.className = section.id === activeSection.id ? 'is-active' : '';
+    if (section.id === activeSection.id) button.setAttribute('aria-current', 'page');
+    button.addEventListener('click', () => {
+      if (section.id !== activeSection.id) queueManagedSection(workspaceConfig, section);
+    });
+    managedSectionList.append(button);
+  });
+}
+
+function setManagedNavigationBusy(busy) {
+  managedSidebar?.setAttribute('aria-busy', String(busy));
+  managedSidebar?.querySelectorAll('button').forEach((button) => {
+    button.disabled = busy;
+  });
+}
+
+function renderManagedSectionOptions(workspaceConfig) {
+  sectionSelect.replaceChildren();
+  const groupElements = new Map();
+  workspaceConfig.sections.forEach((section) => {
+    const option = document.createElement('option');
+    option.value = section.id;
+    option.textContent = section.label;
+    if (!section.group) {
+      sectionSelect.append(option);
+      return;
+    }
+    let group = groupElements.get(section.group);
+    if (!group) {
+      group = document.createElement('optgroup');
+      group.label = section.group;
+      groupElements.set(section.group, group);
+      sectionSelect.append(group);
+    }
+    group.append(option);
+  });
+}
+
+async function activateManagedSection(workspaceConfig, section) {
+  workspaceSelect.disabled = true;
+  sectionSelect.disabled = true;
+  setManagedNavigationBusy(true);
+  try {
+    const activated = await navigateToResource(managedSectionTarget(section), { updateUrl: true });
+    if (!activated) {
+      syncManagedNavigation();
+      return false;
+    }
+    setManagedNavigationSelection(workspaceConfig, section);
+    setStatus(`${getAppLabel('opened')} ${getResourceDisplayName()}`);
+    return true;
+  } finally {
+    workspaceSelect.disabled = false;
+    sectionSelect.disabled = false;
+    setManagedNavigationBusy(false);
+  }
+}
+
+function queueManagedSection(workspaceConfig, section) {
+  const next = managedNavigationQueue
+    .catch(() => {})
+    .then(() => activateManagedSection(workspaceConfig, section));
+  managedNavigationQueue = next;
+  return next;
+}
+
+function syncManagedNavigation() {
+  if (getManagedWorkspaces().length === 0) return;
+  const matched = findManagedSection();
+  if (matched) setManagedNavigationSelection(matched.workspace, matched.section);
+}
+
+function isCollectionNavigationManaged(collectionId) {
+  if (!collectionId || getManagedWorkspaces().length === 0) return false;
+  const matched = findManagedSection({ domainId: state.domain?.id, collectionId });
+  return matched?.section?.collectionId === collectionId;
+}
+
+function getResourceDisplayName(fileName = state.file?.name || '') {
+  const matched = findManagedSection();
+  return matched?.section?.hideFile ? matched.section.label : fileName;
 }
 
 function formatAppLabel(key, fallback, values = {}) {
@@ -676,6 +1050,7 @@ function resetWorkbenchState(domain = state.domain) {
     collectionId: initialCollectionId,
     listLayout: defaultState.list,
     search: '',
+    filterValues: {},
     mode: defaultState.mode,
     variant: ''
   };
@@ -684,7 +1059,7 @@ function resetWorkbenchState(domain = state.domain) {
   }
 }
 
-async function selectDomain(domain) {
+async function selectDomain(domain, options = {}) {
   const selectionVersion = ++state.selectionVersion;
   state.fileOpenVersion += 1;
   state.domain = domain;
@@ -711,13 +1086,22 @@ async function selectDomain(domain) {
   setStatus('加载中');
   const loaded = await loadFiles(domain, selectionVersion);
   if (!loaded) {
-    return;
+    return false;
+  }
+  const navigation = normalizeNavigationTarget(options.navigation);
+  if (navigation.fileName) {
+    const requestedFile = state.files.find((file) => file.name === navigation.fileName);
+    if (requestedFile) {
+      state.file = requestedFile;
+      fileSelect.value = requestedFile.name;
+    }
   }
   if (state.file) {
-    await openSelectedFile({ skipDirtyCheck: true });
+    await openSelectedFile({ skipDirtyCheck: true, navigation });
   } else {
     render();
   }
+  return true;
 }
 
 async function loadFiles(domain = state.domain, selectionVersion = state.selectionVersion) {
@@ -732,6 +1116,52 @@ async function loadFiles(domain = state.domain, selectionVersion = state.selecti
     fileSelect.value = state.file.name;
   }
   setStatus(`${domain.title}: ${state.files.length} ${getAppLabel('files')}`);
+  dispatchResourceEvent('fwe:resources-listed', { files: state.files.map((file) => ({ ...file })) });
+  return true;
+}
+
+function handleTabListKeydown(event) {
+  const activeTab = event.target?.closest?.('[role="tab"]');
+  const tabList = activeTab?.closest?.('[role="tablist"]');
+  if (!activeTab || !tabList) {
+    return false;
+  }
+
+  const tabs = [...tabList.querySelectorAll('[role="tab"]')]
+    .filter((tab) => tab.closest('[role="tablist"]') === tabList && !tab.disabled && !tab.hidden);
+  const currentIndex = tabs.indexOf(activeTab);
+  if (currentIndex < 0 || tabs.length < 2) {
+    return false;
+  }
+
+  let nextIndex = currentIndex;
+  if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+    nextIndex = (currentIndex + 1) % tabs.length;
+  } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+    nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+  } else if (event.key === 'Home') {
+    nextIndex = 0;
+  } else if (event.key === 'End') {
+    nextIndex = tabs.length - 1;
+  } else {
+    return false;
+  }
+
+  event.preventDefault();
+  const tabLists = [...document.querySelectorAll('[role="tablist"]')];
+  const tabListIndex = tabLists.indexOf(tabList);
+  tabs[nextIndex].focus();
+  tabs[nextIndex].click();
+  window.requestAnimationFrame(() => {
+    const updatedTabList = [...document.querySelectorAll('[role="tablist"]')][tabListIndex];
+    const updatedTabs = updatedTabList
+      ? [...updatedTabList.querySelectorAll('[role="tab"]')]
+        .filter((tab) => tab.closest('[role="tablist"]') === updatedTabList && !tab.disabled && !tab.hidden)
+      : [];
+    const selectedTab = updatedTabs.find((tab) => tab.getAttribute('aria-selected') === 'true')
+      || updatedTabs[Math.min(nextIndex, updatedTabs.length - 1)];
+    selectedTab?.focus();
+  });
   return true;
 }
 
@@ -764,7 +1194,8 @@ async function openSelectedFile(options = {}) {
     name: result.name,
     path: result.path,
     ...(result.alias ? { alias: String(result.alias) } : {}),
-    ...(result.revision !== undefined ? { revision: String(result.revision) } : {})
+    ...(result.revision !== undefined ? { revision: String(result.revision) } : {}),
+    ...(result.meta !== undefined ? { meta: clone(result.meta) } : {})
   };
   if (result.type === 'text') {
     state.text = result.content || '';
@@ -776,13 +1207,15 @@ async function openSelectedFile(options = {}) {
   state.selectedKey = '';
   state.selectedEdge = null;
   resetWorkbenchState(state.domain);
+  applyWorkbenchNavigationTarget(normalizeNavigationTarget(options.navigation || readNavigationTarget()));
   resetJsonDraftState();
   state.view.resetPending = true;
   state.dirty = false;
   clearServerDiagnostics();
   resetHistory();
-  setStatus(`${getAppLabel('opened')} ${state.file.name}`);
+  setStatus(`${getAppLabel('opened')} ${getResourceDisplayName(state.file.name)}`);
   render();
+  dispatchResourceEvent('fwe:resource-opened');
   return true;
 }
 
@@ -797,8 +1230,13 @@ async function createFile() {
   }
   const defaults = state.domain.defaults || {};
   const fallback = defaults.fileName || (state.domain.kind === 'text' ? 'new.txt' : 'new.json');
-  const name = window.prompt(getAppLabel('newFileName'), fallback);
+  const name = String(window.prompt(getAppLabel('newFileName'), fallback) || '').trim();
   if (!name) {
+    return false;
+  }
+  const existing = state.files.find((file) => String(file.name || '').toLowerCase() === name.toLowerCase());
+  if (existing?.exists !== false) {
+    setStatus(formatAppLabel('fileAlreadyExists', '文件已存在：{name}', { name }), true);
     return false;
   }
 
@@ -877,16 +1315,260 @@ async function saveFile(options = {}) {
   }
   state.dirty = false;
   clearServerDiagnostics();
-  setStatus(`${getAppLabel('saved')} ${savingFile.name}`);
+  setStatus(`${getAppLabel('saved')} ${getResourceDisplayName(savingFile.name)}`);
   await loadFiles();
   const listedFile = state.files.find((file) => file.name === savingFile.name);
   state.file = {
     ...(listedFile || savingFile),
-    ...(saved?.revision !== undefined ? { revision: String(saved.revision) } : {})
+    ...(saved?.revision !== undefined ? { revision: String(saved.revision) } : {}),
+    ...(saved?.meta !== undefined
+      ? { meta: clone(saved.meta) }
+      : (savingFile.meta !== undefined ? { meta: clone(savingFile.meta) } : {}))
   };
   fileSelect.value = state.file.name;
   render();
+  dispatchResourceEvent('fwe:resource-saved', { saved: saved ? clone(saved) : null });
   return true;
+}
+
+async function refreshCurrentResource() {
+  const currentName = state.file?.name || '';
+  await loadFiles();
+  const next = state.files.find((file) => file.name === currentName) || state.files[0] || null;
+  state.file = next;
+  if (!next) {
+    state.data = null;
+    state.text = '';
+    render();
+    dispatchResourceEvent('fwe:resource-cleared');
+    return false;
+  }
+  fileSelect.value = next.name;
+  await openSelectedFile({ skipDirtyCheck: true });
+  return true;
+}
+
+function currentResourceSnapshot(extra = {}) {
+  return {
+    domain: state.domain ? { id: state.domain.id, title: state.domain.title } : null,
+    file: state.file ? clone(state.file) : null,
+    data: state.data === undefined || state.data === null ? state.data : clone(state.data),
+    text: state.text,
+    selection: currentSelectionSnapshot(),
+    dirty: Boolean(state.dirty || state.jsonDirty),
+    ...extra
+  };
+}
+
+function currentSelectionSnapshot() {
+  const selection = {
+    domainId: state.domain?.id || '',
+    fileName: state.file?.name || '',
+    key: state.selectedKey || ''
+  };
+  if (!state.domain || !selection.key) return selection;
+  const collection = getActiveWorkbenchCollection();
+  if (!collection || !selection.key.startsWith(`${collection.path}[`)) return selection;
+  const selected = findSelectedCollectionItem(collection);
+  if (!selected || selected.path !== selection.key) return selection;
+  return {
+    ...selection,
+    collectionId: collection.id,
+    collectionPath: collection.path,
+    itemId: String(getCollectionItemId(collection, selected.item, selected.index))
+  };
+}
+
+function normalizeNavigationTarget(target = {}) {
+  const source = target && typeof target === 'object' ? target : {};
+  return {
+    domainId: String(source.domainId ?? source.domain ?? '').trim(),
+    fileName: String(source.fileName ?? source.file ?? '').trim(),
+    collectionId: String(source.collectionId ?? source.collection ?? '').trim(),
+    itemId: String(source.itemId ?? source.item ?? '').trim(),
+    mode: String(source.mode ?? '').trim()
+  };
+}
+
+function readNavigationTarget(locationValue = window.location) {
+  const url = new URL(locationValue?.href || window.location.href);
+  return normalizeNavigationTarget({
+    domainId: url.searchParams.get(FWE_NAVIGATION_QUERY.domainId),
+    fileName: url.searchParams.get(FWE_NAVIGATION_QUERY.fileName),
+    collectionId: url.searchParams.get(FWE_NAVIGATION_QUERY.collectionId),
+    itemId: url.searchParams.get(FWE_NAVIGATION_QUERY.itemId),
+    mode: url.searchParams.get(FWE_NAVIGATION_QUERY.mode)
+  });
+}
+
+function currentNavigationTarget() {
+  const selection = currentSelectionSnapshot();
+  return normalizeNavigationTarget({
+    domainId: selection.domainId,
+    fileName: selection.fileName,
+    collectionId: selection.collectionId || state.workbench.collectionId,
+    itemId: selection.itemId,
+    mode: state.workbench.mode
+  });
+}
+
+function buildNavigationHref(target = {}) {
+  const requested = normalizeNavigationTarget(target);
+  const current = currentNavigationTarget();
+  const navigation = {
+    domainId: requested.domainId || current.domainId,
+    fileName: requested.fileName || current.fileName,
+    collectionId: requested.collectionId || current.collectionId,
+    itemId: requested.itemId || current.itemId,
+    mode: requested.mode || current.mode
+  };
+  const url = new URL(window.location.href);
+  Object.values(FWE_NAVIGATION_QUERY).forEach((key) => url.searchParams.delete(key));
+  Object.entries(navigation).forEach(([key, value]) => {
+    if (value) url.searchParams.set(FWE_NAVIGATION_QUERY[key], value);
+  });
+  if (fweSession?.id) {
+    url.searchParams.set(FWE_NAVIGATION_QUERY.sessionId, fweSession.id);
+  }
+  return url.href;
+}
+
+function openNavigationTarget(target = {}, options = {}) {
+  const href = buildNavigationHref(target);
+  return window.open(
+    href,
+    options.target || '_blank',
+    options.features || 'noopener,noreferrer'
+  );
+}
+
+async function navigateToResource(target = {}, options = {}) {
+  const navigation = normalizeNavigationTarget(target);
+  const domain = state.app?.domains?.find((item) => item.id === (navigation.domainId || state.domain?.id));
+  if (!domain) {
+    setStatus(`Unknown navigation domain: ${navigation.domainId || '(empty)'}`, true);
+    return false;
+  }
+  if (!options.skipDirtyCheck && domain.id !== state.domain?.id && !confirmDiscardChanges()) {
+    return false;
+  }
+  if (domain.id !== state.domain?.id) {
+    await selectDomain(domain, { navigation });
+    const matched = navigationMatchesCurrentSelection(navigation);
+    if (matched && options.updateUrl === true) {
+      window.history.pushState(null, '', buildNavigationHref(currentNavigationTarget()));
+    }
+    return matched;
+  }
+
+  if (navigation.fileName && navigation.fileName !== state.file?.name) {
+    const file = state.files.find((item) => item.name === navigation.fileName);
+    if (!file) {
+      setStatus(`Unknown navigation file: ${navigation.fileName}`, true);
+      return false;
+    }
+    if (!options.skipDirtyCheck && !confirmDiscardChanges()) {
+      return false;
+    }
+    state.file = file;
+    fileSelect.value = file.name;
+    await openSelectedFile({ skipDirtyCheck: true, navigation });
+    const matched = navigationMatchesCurrentSelection(navigation);
+    if (matched && options.updateUrl === true) {
+      window.history.pushState(null, '', buildNavigationHref(currentNavigationTarget()));
+    }
+    return matched;
+  }
+
+  if (!navigation.collectionId) {
+    if (options.updateUrl === true) {
+      window.history.pushState(null, '', buildNavigationHref(currentNavigationTarget()));
+    }
+    resetJsonDraftState();
+    render();
+    return true;
+  }
+
+  const applied = applyWorkbenchNavigationTarget(navigation);
+  if (!applied) {
+    return false;
+  }
+  if (options.updateUrl === true) {
+    window.history.pushState(null, '', buildNavigationHref(currentNavigationTarget()));
+  }
+  resetJsonDraftState();
+  render();
+  return true;
+}
+
+function applyWorkbenchNavigationTarget(target = {}) {
+  const navigation = normalizeNavigationTarget(target);
+  if (!navigation.collectionId || !isCollectionWorkbench()) {
+    return false;
+  }
+  if (navigation.domainId && navigation.domainId !== state.domain?.id) {
+    return false;
+  }
+  if (navigation.fileName && navigation.fileName !== state.file?.name) {
+    return false;
+  }
+  const collection = getWorkbenchCollections().find((item) => item.id === navigation.collectionId);
+  if (!collection) {
+    setStatus(`Unknown navigation collection: ${navigation.collectionId}`, true);
+    return false;
+  }
+  const rows = getCollectionRows(collection);
+  if (rows.length === 0 && !navigation.itemId) {
+    state.workbench.collectionId = collection.id;
+    state.selectedKey = '';
+    state.selectedEdge = null;
+    const emptyModes = getCollectionModes(collection);
+    state.workbench.mode = emptyModes.some((mode) => mode.id === navigation.mode)
+      ? navigation.mode
+      : getCollectionDefaultMode(collection);
+    state.workbench.variant = '';
+    return true;
+  }
+  const index = navigation.itemId
+    ? rows.findIndex((item, rowIndex) => String(getCollectionItemId(collection, item, rowIndex)) === navigation.itemId)
+    : (rows.length > 0 ? 0 : -1);
+  if (index < 0) {
+    setStatus(`Unknown navigation item: ${navigation.collectionId}/${navigation.itemId}`, true);
+    return false;
+  }
+  state.workbench.collectionId = collection.id;
+  state.selectedKey = getCollectionItemPath(collection, index);
+  revealCollectionItemInFilters(collection, rows[index], index);
+  const modes = getCollectionModes(collection);
+  state.workbench.mode = modes.some((mode) => mode.id === navigation.mode)
+    ? navigation.mode
+    : getCollectionDefaultMode(collection);
+  state.workbench.variant = '';
+  return true;
+}
+
+function navigationMatchesCurrentSelection(target = {}) {
+  const expected = normalizeNavigationTarget(target);
+  const current = currentNavigationTarget();
+  return (!expected.domainId || expected.domainId === current.domainId)
+    && (!expected.fileName || expected.fileName === current.fileName)
+    && (!expected.collectionId || expected.collectionId === current.collectionId)
+    && (!expected.itemId || expected.itemId === current.itemId)
+    && (!expected.mode || expected.mode === current.mode);
+}
+
+function dispatchSelectionIfChanged() {
+  const selection = currentSelectionSnapshot();
+  const signature = JSON.stringify(selection);
+  if (signature === lastSelectionSignature) return;
+  lastSelectionSignature = signature;
+  dispatchResourceEvent('fwe:selection-changed', { selection });
+}
+
+function dispatchResourceEvent(name, extra = {}) {
+  window.dispatchEvent(new CustomEvent(name, {
+    detail: currentResourceSnapshot(extra)
+  }));
 }
 
 function commitFocusedInspectorControl(sourceElement = null) {
@@ -955,7 +1637,7 @@ function normalizeApiDiagnostics(issues) {
     return {
       ...(issue && typeof issue === 'object' ? issue : {}),
       path: String(issue?.path || ''),
-      message: String(issue?.message || issue?.error || '服务端校验失败'),
+      message: String(issue?.message || issue?.error || getAppLabel('serverValidationFailed')),
       level: String(issue?.level || 'error'),
       source: 'server'
     };
@@ -1021,7 +1703,7 @@ function undoAction() {
   if (!state.history.undo.length) {
     return;
   }
-  const current = createHistorySnapshot('重做点');
+  const current = createHistorySnapshot(getAppLabel('historyRedoPoint'));
   state.history.redo.push({ ...current, key: JSON.stringify({ data: current.data, text: current.text, selectedKey: current.selectedKey }) });
   const snapshot = state.history.undo.pop();
   restoreHistorySnapshot(snapshot, getAppLabel('undo'));
@@ -1031,7 +1713,7 @@ function redoAction() {
   if (!state.history.redo.length) {
     return;
   }
-  const current = createHistorySnapshot('撤销点');
+  const current = createHistorySnapshot(getAppLabel('historyUndoPoint'));
   state.history.undo.push({ ...current, key: JSON.stringify({ data: current.data, text: current.text, selectedKey: current.selectedKey }) });
   const snapshot = state.history.redo.pop();
   restoreHistorySnapshot(snapshot, getAppLabel('redo'));
@@ -1046,16 +1728,20 @@ function restoreHistorySnapshot(snapshot, label) {
   state.inspectorMode = snapshot.inspectorMode || 'form';
   resetJsonDraftState();
   state.dirty = true;
-  setStatus(`${label}: ${snapshot.label || state.file?.name || ''}`);
+  setStatus(`${label}: ${snapshot.label || getResourceDisplayName()}`);
   render();
   updateActionButtons();
 }
 
 function confirmDiscardChanges() {
-  if (!state.dirty && !state.jsonDirty) {
+  if (!hasUnsavedChanges()) {
     return true;
   }
   return window.confirm(getAppLabel('discardUnsavedChanges'));
+}
+
+function hasUnsavedChanges() {
+  return state.dirty || state.jsonDirty;
 }
 
 function updateActionButtons() {
@@ -1076,7 +1762,7 @@ function updateActionButtons() {
   addButton.disabled = !hasFile || state.domain?.kind === 'text' || isSidepanelPreviewActive();
   duplicateButton.disabled = !canDuplicateSelection() || isSidepanelPreviewActive();
   deleteButton.disabled = !canDeleteSelection() || isSidepanelPreviewActive();
-  saveButton.disabled = !hasFile || (!state.dirty && !state.jsonDirty);
+  saveButton.disabled = !hasFile || !hasUnsavedChanges();
   updateSurfaceMoreVisibility();
   updateSurfaceHeader();
 }
@@ -1125,7 +1811,8 @@ function updateSurfaceHeader() {
   if (hidden) {
     closeCommandMenu(surfaceMenu, surfaceMoreButton);
   }
-  surfaceTitle.textContent = state.domain?.title || getAppLabel('editor');
+  const managedSection = findManagedSection()?.section;
+  surfaceTitle.textContent = managedSection?.label || state.domain?.title || getAppLabel('editor');
   surfaceSelection.textContent = getSurfaceSelectionText();
 }
 
@@ -1136,8 +1823,17 @@ function getSurfaceSelectionText() {
   if (state.selectedEdge) {
     return getGraphLabel('edgeKind', '连线');
   }
+  const managedSection = findManagedSection()?.section;
+  if (managedSection?.collectionId && isCollectionWorkbench()) {
+    const collection = getActiveWorkbenchCollection();
+    const selected = collection ? findSelectedCollectionItem(collection) : null;
+    return selected ? getCollectionItemTitle(collection, selected.item, selected.index) : '';
+  }
   if (state.selectedKey) {
     return formatSurfaceSelectionKey(state.selectedKey);
+  }
+  if (managedSection?.hideFile) {
+    return '';
   }
   return state.file.name || '';
 }
@@ -1178,12 +1874,12 @@ function addSelectionItem() {
     return;
   }
   const rows = ensureArray(getByPath(state.data, targetPath));
-  pushHistory(`添加 ${targetPath}`);
+  pushHistory(formatAppLabel('historyAddPath', '添加 {path}', { path: targetPath }));
   rows.push(createDefaultItemForPath(targetPath));
   setByPath(state.data, targetPath, rows);
   state.selectedKey = `${targetPath}[${rows.length - 1}]`;
   state.selectedEdge = null;
-  markDirtyAndRender(`已添加 ${targetPath}`);
+  markDirtyAndRender(formatAppLabel('statusAddedPath', '已添加 {path}', { path: targetPath }));
 }
 
 function duplicateSelection() {
@@ -1191,7 +1887,7 @@ function duplicateSelection() {
   if (!info?.exists) {
     return;
   }
-  pushHistory(`复制 ${info.path}`);
+  pushHistory(formatAppLabel('historyDuplicatePath', '复制 {path}', { path: info.path }));
   if (info.parentIsArray) {
     const copy = clone(info.value);
     ensureUniqueIdentity(copy, info.parentPath);
@@ -1214,7 +1910,7 @@ function duplicateSelection() {
     state.selectedKey = info.parentPath ? `${info.parentPath}.${nextKey}` : nextKey;
   }
   state.selectedEdge = null;
-  markDirtyAndRender(`已复制 ${info.path}`);
+  markDirtyAndRender(formatAppLabel('statusDuplicatedPath', '已复制 {path}', { path: info.path }));
 }
 
 function deleteSelection() {
@@ -1230,7 +1926,7 @@ function deleteSelection() {
   if (!window.confirm(`${formatAppLabel('deleteSelectionConfirm', '删除 {path}？', { path: info.path })}${suffix}`)) {
     return;
   }
-  pushHistory(`删除 ${info.path}`);
+  pushHistory(formatAppLabel('historyDeletePath', '删除 {path}', { path: info.path }));
   if (info.parentIsArray) {
     info.parent.splice(info.key, 1);
   } else {
@@ -1238,7 +1934,7 @@ function deleteSelection() {
   }
   state.selectedKey = '';
   state.selectedEdge = null;
-  markDirtyAndRender(`已删除 ${info.path}`);
+  markDirtyAndRender(formatAppLabel('statusDeletedPath', '已删除 {path}', { path: info.path }));
 }
 
 function canDuplicateSelection() {
@@ -1274,7 +1970,7 @@ function addGraphSelectionItem() {
   const idKey = getGraphCollectionIdKey(graph.baseCollection);
   const itemId = item?.[idKey];
 
-  pushHistory(`添加 ${targetPath}`);
+  pushHistory(formatAppLabel('historyAddPath', '添加 {path}', { path: targetPath }));
   if (selectedBaseNode && edgeRule && itemId !== undefined && itemId !== null && itemId !== '') {
     const previousTarget = getByPath(selectedBaseNode.value, edgeRule.field);
     if (previousTarget !== undefined && previousTarget !== null && previousTarget !== '') {
@@ -1286,7 +1982,7 @@ function addGraphSelectionItem() {
   setByPath(state.data, targetPath, rows);
   state.selectedKey = `${graph.baseCollection}:${itemId}`;
   state.selectedEdge = null;
-  markDirtyAndRender(`已添加 ${targetPath}`);
+  markDirtyAndRender(formatAppLabel('statusAddedPath', '已添加 {path}', { path: targetPath }));
   return true;
 }
 
@@ -1316,7 +2012,7 @@ function deleteGraphSelectionItem() {
     : null;
   const fallback = getGraphDeleteFallbackTarget(node, edgeRule, graph, removedId);
 
-  pushHistory(`删除 ${info.path}`);
+  pushHistory(formatAppLabel('historyDeletePath', '删除 {path}', { path: info.path }));
   rewriteGraphReferences(node.collection, removedId, fallback);
   info.parent.splice(info.key, 1);
   if (node.collection === graph.baseCollection) {
@@ -1324,7 +2020,7 @@ function deleteGraphSelectionItem() {
   }
   state.selectedKey = '';
   state.selectedEdge = null;
-  markDirtyAndRender(`已删除 ${info.path}`);
+  markDirtyAndRender(formatAppLabel('statusDeletedPath', '已删除 {path}', { path: info.path }));
   return true;
 }
 
@@ -1367,7 +2063,7 @@ function chainGenericGraphNode(node, action, graph) {
   }
 
   const previousTarget = getByPath(node.value, edgeField);
-  pushHistory(action.historyLabel || `${action.label || '添加'} ${targetPath}`);
+  pushHistory(action.historyLabel || formatAppLabel('historyAddPath', '添加 {path}', { path: targetPath }));
   if (action.carry !== false && !isGraphEmptyMutationValue(previousTarget, action)) {
     setByPath(item, action.carryTo || edgeField, previousTarget);
   }
@@ -1377,7 +2073,7 @@ function chainGenericGraphNode(node, action, graph) {
   setByPath(state.data, targetPath, rows);
   state.selectedKey = `${targetCollection}:${itemId}`;
   state.selectedEdge = null;
-  markDirtyAndRender(action.doneLabel || `已添加 ${targetPath}`);
+  markDirtyAndRender(action.doneLabel || formatAppLabel('statusAddedPath', '已添加 {path}', { path: targetPath }));
   return true;
 }
 
@@ -1397,7 +2093,7 @@ function appendGenericGraphReference(node, action) {
     return false;
   }
 
-  pushHistory(action.historyLabel || `${action.label || '添加'} ${targetPath}`);
+  pushHistory(action.historyLabel || formatAppLabel('historyAddPath', '添加 {path}', { path: targetPath }));
   const current = getByPath(node.value, edgeField);
   const refs = Array.isArray(current)
     ? [...current]
@@ -1409,7 +2105,7 @@ function appendGenericGraphReference(node, action) {
   setByPath(state.data, targetPath, rows);
   state.selectedKey = `${targetCollection}:${itemId}`;
   state.selectedEdge = null;
-  markDirtyAndRender(action.doneLabel || `已添加 ${targetPath}`);
+  markDirtyAndRender(action.doneLabel || formatAppLabel('statusAddedPath', '已添加 {path}', { path: targetPath }));
   return true;
 }
 
@@ -1593,12 +2289,12 @@ function getActionInsertPath() {
   if (!key) {
     return '';
   }
-  pushHistory(`添加 ${key}`);
+  pushHistory(formatAppLabel('historyAddPath', '添加 {path}', { path: key }));
   const target = value && typeof value === 'object' && !Array.isArray(value) ? value : state.data;
   target[key] = '';
   state.selectedKey = context.targetPath ? `${context.targetPath}.${key}` : key;
   state.selectedEdge = null;
-  markDirtyAndRender(`已添加 ${key}`);
+  markDirtyAndRender(formatAppLabel('statusAddedPath', '已添加 {path}', { path: key }));
   return '';
 }
 
@@ -2113,6 +2809,16 @@ function createViewContext(viewSpec) {
     },
     render,
     renderInspector,
+    renderRootForm(host = documentTree) {
+      host.innerHTML = '';
+      const rootContext = buildRootInspectorContext();
+      const form = resolveInspectorForm(rootContext) || createAutoInspectorForm(rootContext);
+      if (form) {
+        renderInspectorForm(form, rootContext, host);
+      } else {
+        renderInspectorReadonly(rootContext, host);
+      }
+    },
     renderInspectorMode,
     renderDocument,
     renderTable,
@@ -2130,6 +2836,10 @@ function createViewContext(viewSpec) {
       renderInspectorMode();
     },
     setStatus,
+    navigation: fweRuntime.navigation,
+    createResourceLink(options = {}) {
+      return fweRuntime.ui.createResourceLink(options);
+    },
     refs: state.domain?.refs || {}
   };
   return addViewContextCompatibilityAliases(context, viewSpec);
@@ -2141,6 +2851,7 @@ function addViewContextCompatibilityAliases(context, viewSpec) {
 }
 
 function render() {
+  syncManagedNavigation();
   hideAllViews();
   const resolved = resolveDomainView(state.domain);
   const ctx = createViewContext(resolved.spec);
@@ -2159,11 +2870,13 @@ function render() {
     inspectorForm.innerHTML = `<div class="inspector-empty">${escapeHtml(getAppLabel('openOrCreateFile', '打开或新建一个文件。'))}</div>`;
     jsonEditor.value = '';
     updateActionButtons();
+    dispatchSelectionIfChanged();
     return;
   }
 
   resolved.view.render(ctx, resolved.spec);
   updateActionButtons();
+  dispatchSelectionIfChanged();
 }
 
 function hideAllViews() {
@@ -2227,7 +2940,7 @@ function renderTable() {
       tr.classList.add('is-selected');
     }
     tr.innerHTML = columns
-      .map((column) => `<td>${escapeHtml(formatValue(getByPath(row, column.path)))}</td>`)
+      .map((column) => `<td>${escapeHtml(formatCollectionColumnValue(column, row))}</td>`)
       .join('');
     tr.addEventListener('click', () => {
       state.selectedKey = rowPath;
@@ -2267,6 +2980,39 @@ function normalizeColumn(column, options = {}) {
     result.label = resolveColumnLabel(result.path, options) || result.path;
   }
   return result;
+}
+
+function formatCollectionColumnValue(column, item) {
+  let value = getByPath(item, column.path);
+  const valueMap = column.valueMap && typeof column.valueMap === 'object'
+    ? column.valueMap
+    : null;
+  const mapValue = (entry) => {
+    const key = String(entry);
+    return valueMap && Object.prototype.hasOwnProperty.call(valueMap, key)
+      ? valueMap[key]
+      : entry;
+  };
+
+  if (Array.isArray(value)) {
+    const values = value.map(mapValue);
+    value = Object.prototype.hasOwnProperty.call(column, 'join')
+      ? values.map((entry) => formatValue(entry)).join(String(column.join ?? ''))
+      : values;
+  } else {
+    value = mapValue(value);
+  }
+
+  if ((value === undefined || value === null || value === '')
+    && Object.prototype.hasOwnProperty.call(column, 'emptyText')) {
+    value = column.emptyText;
+  }
+
+  if (typeof value === 'number' && Number.isInteger(column.precision)) {
+    value = value.toFixed(Math.max(0, column.precision));
+  }
+
+  return formatValue(value);
 }
 
 function resolveColumnLabel(pathText, options = {}) {
@@ -2381,6 +3127,42 @@ function getWorkbenchCollections(domain = state.domain) {
   return rowsPath ? [{ id: 'items', label: getAppLabel('items'), path: rowsPath }] : [];
 }
 
+function getWorkbenchCollectionGroups(collections = getWorkbenchCollections()) {
+  const configured = ensureArray(state.domain?.workbench?.collectionGroups || [], { scalar: true });
+  const groups = [];
+  const groupsById = new Map();
+  const addGroup = (value, fallbackLabel = '') => {
+    const source = typeof value === 'string' ? { id: value, label: value } : (value || {});
+    const id = String(source.id || source.value || '').trim();
+    if (!id) return null;
+    if (groupsById.has(id)) return groupsById.get(id);
+    const group = {
+      id,
+      label: String(source.label || source.title || fallbackLabel || id),
+      collections: []
+    };
+    groups.push(group);
+    groupsById.set(id, group);
+    return group;
+  };
+
+  configured.forEach((group) => addGroup(group));
+  const ungrouped = [];
+  collections.forEach((collection) => {
+    const groupValue = collection.group || collection.collectionGroup;
+    const group = addGroup(groupValue, typeof groupValue === 'object' ? groupValue?.label : '');
+    if (group) group.collections.push(collection);
+    else ungrouped.push(collection);
+  });
+
+  const populated = groups.filter((group) => group.collections.length > 0);
+  if (populated.length <= 0) return [];
+  if (ungrouped.length > 0) {
+    populated.push({ id: '__ungrouped', label: getAppLabel('other') || 'Other', collections: ungrouped });
+  }
+  return populated;
+}
+
 function getActiveWorkbenchCollection() {
   const collections = getWorkbenchCollections();
   return collections.find((item) => item.id === state.workbench.collectionId) || collections[0] || null;
@@ -2422,8 +3204,8 @@ function getCollectionItemSubtitle(collection, item) {
       if (typeof field === 'string') {
         return getByPath(item, field);
       }
-      const value = getByPath(item, field.path || '');
-      return field.label ? `${field.label}: ${formatValue(value)}` : value;
+      const value = formatCollectionColumnValue(field, item);
+      return field.label ? `${field.label}: ${value}` : value;
     })
     .filter((value) => value !== undefined && value !== null && String(value) !== '')
     .map((value) => String(value))
@@ -2448,28 +3230,78 @@ function getCollectionSearchText(collection, item, index) {
 
 function getFilteredCollectionRows(collection) {
   const query = state.workbench.search;
-  const rows = getCollectionRows(collection).map((item, index) => ({ item, index }));
-  if (!query) {
-    return rows;
+  let rows = getCollectionRows(collection).map((item, index) => ({ item, index }));
+  getAppliedCollectionFilters(collection).forEach(({ filter, options, selected }) => {
+    rows = rows.filter(({ item, index }) => (
+      fweRuntime.collectionFilters.matches(filter, options, selected, item, index)
+    ));
+  });
+  return query
+    ? rows.filter(({ item, index }) => getCollectionSearchText(collection, item, index).includes(query))
+    : rows;
+}
+
+function getAppliedCollectionFilters(collection) {
+  return fweRuntime.collectionFilters.normalize(collection).map((filter) => {
+    const options = fweRuntime.collectionFilters.resolveOptions(filter, state.data || {});
+    const collectionValues = getCollectionFilterValueState(collection);
+    if (!Object.prototype.hasOwnProperty.call(collectionValues, filter.id)) {
+      collectionValues[filter.id] = fweRuntime.collectionFilters.defaultSelection(filter, options);
+    } else {
+      collectionValues[filter.id] = fweRuntime.collectionFilters.normalizeSelection(
+        collectionValues[filter.id],
+        options
+      );
+    }
+    return { filter, options, selected: collectionValues[filter.id] };
+  });
+}
+
+function getCollectionFilterValueState(collection) {
+  if (!state.workbench.filterValues || typeof state.workbench.filterValues !== 'object') {
+    state.workbench.filterValues = {};
   }
-  return rows.filter(({ item, index }) => getCollectionSearchText(collection, item, index).includes(query));
+  if (!state.workbench.filterValues[collection.id]) {
+    state.workbench.filterValues[collection.id] = {};
+  }
+  return state.workbench.filterValues[collection.id];
+}
+
+function revealCollectionItemInFilters(collection, item, index) {
+  const collectionValues = getCollectionFilterValueState(collection);
+  getAppliedCollectionFilters(collection).forEach(({ filter, options, selected }) => {
+    if (fweRuntime.collectionFilters.matches(filter, options, selected, item, index)) {
+      return;
+    }
+    const matching = fweRuntime.collectionFilters.matchingValues(filter, options, item, index);
+    if (matching.length) {
+      collectionValues[filter.id] = [...new Set([...selected, ...matching])];
+    }
+  });
+}
+
+function reconcileCollectionSelection(collection, rows = getFilteredCollectionRows(collection)) {
+  const selectedPath = state.selectedKey || '';
+  if (rows.some(({ index }) => getCollectionItemPath(collection, index) === selectedPath)) {
+    return false;
+  }
+  state.selectedKey = rows.length ? getCollectionItemPath(collection, rows[0].index) : '';
+  state.selectedEdge = null;
+  state.workbench.mode = getCollectionDefaultMode(collection);
+  state.workbench.variant = '';
+  resetJsonDraftState();
+  return true;
 }
 
 function findSelectedCollectionItem(collection) {
-  const rows = getCollectionRows(collection);
+  const rows = getFilteredCollectionRows(collection);
   const pathText = state.selectedKey || '';
-  const prefix = `${collection.path}[`;
-  if (pathText.startsWith(prefix)) {
-    const match = pathText.slice(prefix.length).match(/^(\d+)/);
-    if (match) {
-      const index = Number(match[1]);
-      if (rows[index]) {
-        return { item: rows[index], index, path: getCollectionItemPath(collection, index) };
-      }
-    }
+  const selected = rows.find(({ index }) => getCollectionItemPath(collection, index) === pathText);
+  if (selected) {
+    return { ...selected, path: getCollectionItemPath(collection, selected.index) };
   }
   if (rows.length) {
-    return { item: rows[0], index: 0, path: getCollectionItemPath(collection, 0) };
+    return { ...rows[0], path: getCollectionItemPath(collection, rows[0].index) };
   }
   return null;
 }
@@ -2489,6 +3321,9 @@ function getCollectionDefaultMode(collection) {
 }
 
 function renderCollectionWorkbench() {
+  [...collectionWorkbench.children].forEach((child) => {
+    if (!child.matches('.collection-browser, .collection-editor')) child.remove();
+  });
   const collection = getActiveWorkbenchCollection();
   if (!collection) {
     collectionEditorBody.innerHTML = `<div class="empty">${escapeHtml(getAppLabel('noCollections'))}</div>`;
@@ -2503,39 +3338,125 @@ function renderCollectionWorkbench() {
   renderCollectionEditor(collection);
 }
 
+function refreshCollectionFilterResults(collection) {
+  if (!collection) return;
+  const rows = getFilteredCollectionRows(collection);
+  reconcileCollectionSelection(collection, rows);
+  renderCollectionList(collection, rows);
+  renderCollectionEditor(collection);
+  updateActionButtons();
+  dispatchSelectionIfChanged();
+}
+
 function renderCollectionTabs(activeCollection) {
+  collectionTabs.hidden = isCollectionNavigationManaged(activeCollection?.id);
   const collections = getWorkbenchCollections();
+  const groups = getWorkbenchCollectionGroups(collections);
+  const activeGroup = groups.find((group) => group.collections.some((collection) => collection.id === activeCollection.id)) || null;
   collectionTabs.innerHTML = '';
-  collections.forEach((collection) => {
+  collectionTabs.classList.toggle('is-grouped', groups.length > 0);
+
+  if (groups.length > 0) {
+    const groupTabs = document.createElement('div');
+    groupTabs.className = 'collection-tab-groups';
+    groupTabs.setAttribute('role', 'tablist');
+    groupTabs.setAttribute('aria-label', getAppLabel('collectionGroups') || 'Collection groups');
+    groups.forEach((group) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = group.label;
+      button.className = group.id === activeGroup?.id ? 'is-active' : '';
+      button.dataset.collectionGroupId = group.id;
+      button.dataset.collectionIds = group.collections.map((collection) => collection.id).join(' ');
+      button.setAttribute('role', 'tab');
+      button.setAttribute('aria-selected', String(group.id === activeGroup?.id));
+      button.tabIndex = group.id === activeGroup?.id ? 0 : -1;
+      button.addEventListener('click', () => {
+        if (group.id === activeGroup?.id) return;
+        activateWorkbenchCollection(group.collections[0]);
+      });
+      groupTabs.append(button);
+    });
+    collectionTabs.append(groupTabs);
+  }
+
+  const itemTabs = document.createElement('div');
+  itemTabs.className = 'collection-tab-items';
+  itemTabs.setAttribute('role', 'tablist');
+  itemTabs.setAttribute('aria-label', getAppLabel('collections') || 'Collections');
+  const visibleCollections = activeGroup?.collections || collections;
+  visibleCollections.forEach((collection) => {
     const button = document.createElement('button');
     button.type = 'button';
     button.textContent = collection.label || collection.title || collection.id;
     button.className = collection.id === activeCollection.id ? 'is-active' : '';
-    button.addEventListener('click', () => {
-      if (state.workbench.collectionId === collection.id) {
-        return;
-      }
-      state.workbench.collectionId = collection.id;
-      state.workbench.mode = getCollectionDefaultMode(collection);
-      state.workbench.variant = '';
-      const rows = getCollectionRows(collection);
-      state.selectedKey = rows.length ? getCollectionItemPath(collection, 0) : '';
-      resetJsonDraftState();
-      render();
-    });
-    collectionTabs.append(button);
+    button.dataset.collectionId = collection.id;
+    button.setAttribute('role', 'tab');
+    button.setAttribute('aria-selected', String(collection.id === activeCollection.id));
+    button.tabIndex = collection.id === activeCollection.id ? 0 : -1;
+    button.addEventListener('click', () => activateWorkbenchCollection(collection));
+    itemTabs.append(button);
   });
+  collectionTabs.append(itemTabs);
+}
+
+function activateWorkbenchCollection(collection) {
+  if (!collection || state.workbench.collectionId === collection.id) return;
+  state.workbench.collectionId = collection.id;
+  state.workbench.mode = getCollectionDefaultMode(collection);
+  state.workbench.variant = '';
+  const rows = getCollectionRows(collection);
+  state.selectedKey = rows.length ? getCollectionItemPath(collection, 0) : '';
+  resetJsonDraftState();
+  render();
 }
 
 function renderCollectionBrowser(collection) {
   collectionSearch.value = state.workbench.search;
   collectionDetailButton.classList.toggle('is-active', state.workbench.listLayout !== 'grid');
   collectionGridButton.classList.toggle('is-active', state.workbench.listLayout === 'grid');
+  collectionDetailButton.setAttribute('aria-pressed', String(state.workbench.listLayout !== 'grid'));
+  collectionGridButton.setAttribute('aria-pressed', String(state.workbench.listLayout === 'grid'));
   const listLayouts = getCollectionListLayouts(collection);
   collectionLayoutTabs.hidden = listLayouts && !ensureArray(listLayouts, { scalar: true }).includes('grid');
-  collectionList.innerHTML = '';
-
+  renderCollectionFilters(collection);
   const rows = getFilteredCollectionRows(collection);
+  reconcileCollectionSelection(collection, rows);
+  renderCollectionList(collection, rows);
+}
+
+function renderCollectionFilters(collection) {
+  collectionFilters.replaceChildren();
+  const applied = getAppliedCollectionFilters(collection);
+  collectionFilters.hidden = applied.length === 0;
+  applied.forEach(({ filter, options, selected }) => {
+    const control = fweRuntime.ui.createMultiSelect({
+      id: `collectionFilter_${String(filter.id).replace(/[^A-Za-z0-9_-]/g, '_')}`,
+      placeholder: filter.label,
+      selectAllLabel: getAppLabel('selectAll'),
+      clearLabel: getAppLabel('clear'),
+      emptyText: filter.emptyText || getAppLabel('noFilterOptions'),
+      showActions: filter.showActions !== false,
+      items: options.map((option) => ({
+        value: option.value,
+        label: option.label,
+        group: option.group,
+        count: option.count
+      })),
+      selected
+    });
+    control.dataset.filterId = filter.id;
+    control.setAttribute('aria-label', filter.label);
+    control.addEventListener('change', (event) => {
+      getCollectionFilterValueState(collection)[filter.id] = event.detail?.values || [];
+      refreshCollectionFilterResults(collection);
+    });
+    collectionFilters.append(control);
+  });
+}
+
+function renderCollectionList(collection, rows = getFilteredCollectionRows(collection)) {
+  collectionList.innerHTML = '';
   if (!rows.length) {
     collectionList.innerHTML = `<div class="collection-empty">${escapeHtml(getAppLabel('noItems'))}</div>`;
     return;
@@ -2546,6 +3467,8 @@ function renderCollectionBrowser(collection) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = `collection-item${state.selectedKey === pathText ? ' is-active' : ''}`;
+    button.dataset.collectionId = collection.id;
+    button.dataset.itemId = String(getCollectionItemId(collection, item, index));
     button.innerHTML = `
       <span class="collection-item__title">${escapeHtml(getCollectionItemTitle(collection, item, index))}</span>
       <span class="collection-item__meta">${escapeHtml(getCollectionItemSubtitle(collection, item) || String(getCollectionItemId(collection, item, index)))}</span>
@@ -2605,6 +3528,9 @@ function renderCollectionModeTabs(collection, item) {
     button.type = 'button';
     button.textContent = mode.label || mode.id;
     button.className = mode.id === state.workbench.mode ? 'is-active' : '';
+    button.setAttribute('role', 'tab');
+    button.setAttribute('aria-selected', String(mode.id === state.workbench.mode));
+    button.tabIndex = mode.id === state.workbench.mode ? 0 : -1;
     button.addEventListener('click', () => {
       if (state.workbench.mode === mode.id) {
         return;
@@ -2652,6 +3578,9 @@ function renderCollectionVariantTabs(collection, item) {
     button.type = 'button';
     button.textContent = entry.label;
     button.className = entry.id === state.workbench.variant ? 'is-active' : '';
+    button.setAttribute('role', 'tab');
+    button.setAttribute('aria-selected', String(entry.id === state.workbench.variant));
+    button.tabIndex = entry.id === state.workbench.variant ? 0 : -1;
     button.addEventListener('click', () => {
       state.workbench.variant = entry.id;
       resetJsonDraftState();
@@ -2740,14 +3669,25 @@ function renderCollectionGrid(collection) {
     const card = document.createElement('button');
     card.type = 'button';
     card.className = `collection-grid-card${state.selectedKey === getCollectionItemPath(collection, index) ? ' is-active' : ''}`;
+    card.dataset.collectionId = collection.id;
+    card.dataset.itemId = String(getCollectionItemId(collection, item, index));
     const title = document.createElement('span');
     title.className = 'collection-grid-card__title';
     title.textContent = getCollectionItemTitle(collection, item, index);
+    title.title = title.textContent;
     card.append(title);
     columns.slice(0, 6).forEach((column) => {
       const row = document.createElement('span');
       row.className = 'collection-grid-card__row';
-      row.innerHTML = `<span>${escapeHtml(column.label || column.path)}</span><b>${escapeHtml(formatValue(getByPath(item, column.path)))}</b>`;
+      const label = document.createElement('span');
+      label.className = 'collection-grid-card__label';
+      label.textContent = column.label || column.path;
+      label.title = label.textContent;
+      const value = document.createElement('b');
+      value.className = 'collection-grid-card__value';
+      value.textContent = formatCollectionColumnValue(column, item);
+      value.title = value.textContent;
+      row.append(label, value);
       card.append(row);
     });
     card.addEventListener('click', () => selectCollectionItem(collection, index));
@@ -2807,8 +3747,8 @@ function renderSidepanelWorkbench() {
   const activeTab = getActiveSidepanelTab();
   if (!activeTab) {
     sidepanelTabs.innerHTML = '';
-    sidepanelList.innerHTML = '<div class="collection-empty">No sidepanel tabs configured.</div>';
-    sidepanelEditorBody.innerHTML = '<div class="empty">No editor configured.</div>';
+    sidepanelList.innerHTML = `<div class="collection-empty">${escapeHtml(getAppLabel('noSidepanelTabs'))}</div>`;
+    sidepanelEditorBody.innerHTML = `<div class="empty">${escapeHtml(getAppLabel('noEditorConfigured'))}</div>`;
     renderSidepanelModeTabs(false);
     renderSidepanelReferences();
     renderSidepanelDiagnostics();
@@ -2852,6 +3792,10 @@ function renderSidepanelModeTabs(visible) {
   const isJson = state.inspectorMode === 'json';
   sidepanelFormModeButton.classList.toggle('is-active', !isJson);
   sidepanelJsonModeButton.classList.toggle('is-active', isJson);
+  sidepanelFormModeButton.setAttribute('aria-selected', String(!isJson));
+  sidepanelJsonModeButton.setAttribute('aria-selected', String(isJson));
+  sidepanelFormModeButton.tabIndex = isJson ? -1 : 0;
+  sidepanelJsonModeButton.tabIndex = isJson ? 0 : -1;
 }
 
 function renderSidepanelTabs(activeTab) {
@@ -2861,6 +3805,9 @@ function renderSidepanelTabs(activeTab) {
     button.type = 'button';
     button.textContent = tab.label;
     button.className = tab.id === activeTab.id ? 'is-active' : '';
+    button.setAttribute('role', 'tab');
+    button.setAttribute('aria-selected', String(tab.id === activeTab.id));
+    button.tabIndex = tab.id === activeTab.id ? 0 : -1;
     button.addEventListener('click', () => {
       if (state.workbench.collectionId === tab.id) {
         return;
@@ -3260,16 +4207,16 @@ function validateBlueprintGraph(diagnostics) {
   model.nodes.forEach((node, index) => {
     const nodePath = `${spec.nodes}[${index}]`;
     if (seenNodeIds.has(String(node.id))) {
-      diagnostics.push({ path: `${nodePath}.${spec.nodeId}`, message: `节点 id 重复: ${node.id}` });
+      diagnostics.push({ path: `${nodePath}.${spec.nodeId}`, message: formatAppLabel('diagnosticBlueprintDuplicateNodeId', '节点 id 重复: {id}', { id: node.id }) });
     }
     seenNodeIds.add(String(node.id));
     if (!node.typeSpec) {
-      diagnostics.push({ path: `${nodePath}.${spec.nodeType}`, message: `未知蓝图节点类型: ${node.typeId}` });
+      diagnostics.push({ path: `${nodePath}.${spec.nodeType}`, message: formatAppLabel('diagnosticBlueprintUnknownNodeType', '未知蓝图节点类型: {type}', { type: node.typeId }) });
     }
     if (String(state.domain?.graph?.layout || '').toLowerCase() === 'free') {
       const pos = getByPath(node.value, spec.position);
       if (!pos || !isIntegerValue(pos.x) || !isIntegerValue(pos.y)) {
-        diagnostics.push({ path: `${nodePath}.${spec.position}`, message: `蓝图节点坐标必须是整数: #${node.id}` });
+        diagnostics.push({ path: `${nodePath}.${spec.position}`, message: formatAppLabel('diagnosticBlueprintInvalidPosition', '蓝图节点坐标必须是整数: #{id}', { id: node.id }) });
       }
     }
   });
@@ -3279,25 +4226,28 @@ function validateBlueprintGraph(diagnostics) {
   model.edges.forEach((edge, index) => {
     const edgePath = `${spec.edges}[${index}]`;
     if (!edge.sourceNode) {
-      diagnostics.push({ path: `${edgePath}.from.node`, message: `连线来源节点不存在: ${getByPath(edge.value, 'from.node')}` });
+      diagnostics.push({ path: `${edgePath}.from.node`, message: formatAppLabel('diagnosticBlueprintMissingSourceNode', '连线来源节点不存在: {node}', { node: getByPath(edge.value, 'from.node') }) });
       return;
     }
     if (!edge.targetNode) {
-      diagnostics.push({ path: `${edgePath}.to.node`, message: `连线目标节点不存在: ${getByPath(edge.value, 'to.node')}` });
+      diagnostics.push({ path: `${edgePath}.to.node`, message: formatAppLabel('diagnosticBlueprintMissingTargetNode', '连线目标节点不存在: {node}', { node: getByPath(edge.value, 'to.node') }) });
       return;
     }
     if (!edge.sourcePort) {
-      diagnostics.push({ path: `${edgePath}.from.port`, message: `来源输出端口不存在: #${edge.sourceNode.id}.${edge.fromPort}` });
+      diagnostics.push({ path: `${edgePath}.from.port`, message: formatAppLabel('diagnosticBlueprintMissingSourcePort', '来源输出端口不存在: #{node}.{port}', { node: edge.sourceNode.id, port: edge.fromPort }) });
       return;
     }
     if (!edge.targetPort) {
-      diagnostics.push({ path: `${edgePath}.to.port`, message: `目标输入端口不存在: #${edge.targetNode.id}.${edge.toPort}` });
+      diagnostics.push({ path: `${edgePath}.to.port`, message: formatAppLabel('diagnosticBlueprintMissingTargetPort', '目标输入端口不存在: #{node}.{port}', { node: edge.targetNode.id, port: edge.toPort }) });
       return;
     }
     if (!areBlueprintPortsCompatible(edge.sourcePort, edge.targetPort)) {
       diagnostics.push({
         path: edgePath,
-        message: `端口类型不兼容: ${edge.sourceNode.id}.${edge.fromPort}(${edge.sourcePort.type}) -> ${edge.targetNode.id}.${edge.toPort}(${edge.targetPort.type})`
+        message: formatAppLabel('diagnosticBlueprintIncompatiblePorts', '端口类型不兼容: {source} -> {target}', {
+          source: `${edge.sourceNode.id}.${edge.fromPort}(${edge.sourcePort.type})`,
+          target: `${edge.targetNode.id}.${edge.toPort}(${edge.targetPort.type})`
+        })
       });
     }
     const inputKey = `${edge.to}:${edge.toPort}`;
@@ -3314,11 +4264,11 @@ function validateBlueprintGraph(diagnostics) {
     if (edge.targetPort.kind === 'data'
       && !edge.targetPort.multiple
       && (inputCounts.get(`${edge.to}:${edge.toPort}`) || 0) > 1) {
-      diagnostics.push({ path: edgePath, message: `输入端口只能连接一次: #${edge.targetNode.id}.${edge.toPort}` });
+      diagnostics.push({ path: edgePath, message: formatAppLabel('diagnosticBlueprintInputSingle', '输入端口只能连接一次: #{node}.{port}', { node: edge.targetNode.id, port: edge.toPort }) });
     }
     const sourceMultiple = edge.sourcePort.multiple || edge.sourcePort.kind === 'data';
     if (!sourceMultiple && (outputCounts.get(`${edge.from}:${edge.fromPort}`) || 0) > 1) {
-      diagnostics.push({ path: edgePath, message: `输出端口只能连接一次: #${edge.sourceNode.id}.${edge.fromPort}` });
+      diagnostics.push({ path: edgePath, message: formatAppLabel('diagnosticBlueprintOutputSingle', '输出端口只能连接一次: #{node}.{port}', { node: edge.sourceNode.id, port: edge.fromPort }) });
     }
   });
 }
@@ -3364,7 +4314,7 @@ function validateObjectRule(rule, diagnostics) {
     const value = target.value;
     if (normalizedKind === 'required') {
       if (value === undefined || value === null || value === '' || (Array.isArray(value) && !value.length)) {
-        pushDiagnostic(diagnostics, rule, target.path, rule.message || `必填：${target.path}`);
+        pushDiagnostic(diagnostics, rule, target.path, rule.message || formatAppLabel('diagnosticRequired', '必填：{path}', { path: target.path }));
       }
       return;
     }
@@ -3374,45 +4324,61 @@ function validateObjectRule(rule, diagnostics) {
     if (normalizedKind === 'type') {
       const expected = rule.value || rule.expected || rule.dataType;
       if (expected && !matchesType(value, expected)) {
-        pushDiagnostic(diagnostics, rule, target.path, rule.message || `${target.path} 应为 ${expected}`);
+        pushDiagnostic(diagnostics, rule, target.path, rule.message || formatAppLabel('diagnosticExpectedType', '{path} 应为 {expected}', { path: target.path, expected }));
       }
     } else if (normalizedKind === 'eachtype' || normalizedKind === 'itemstype') {
       const expected = rule.value || rule.expected || rule.dataType;
       if (!Array.isArray(value)) {
-        pushDiagnostic(diagnostics, rule, target.path, rule.message || `应为数组：${target.path}`);
+        pushDiagnostic(diagnostics, rule, target.path, rule.message || formatAppLabel('diagnosticExpectedArray', '应为数组：{path}', { path: target.path }));
       } else if (expected) {
         value.forEach((item, index) => {
           if (!matchesType(item, expected)) {
-            pushDiagnostic(diagnostics, rule, `${target.path}[${index}]`, rule.message || `${target.path}[${index}] 应为 ${expected}`);
+            const itemPath = `${target.path}[${index}]`;
+            pushDiagnostic(diagnostics, rule, itemPath, rule.message || formatAppLabel('diagnosticExpectedType', '{path} 应为 {expected}', { path: itemPath, expected }));
           }
         });
       }
     } else if (normalizedKind === 'enum' || normalizedKind === 'oneof') {
       const values = rule.values || rule.options || [];
       if (values.length && !values.map(String).includes(String(value))) {
-        pushDiagnostic(diagnostics, rule, target.path, rule.message || `无效取值 ${target.path}: ${value}`);
+        pushDiagnostic(diagnostics, rule, target.path, rule.message || formatAppLabel('diagnosticInvalidValue', '无效取值 {path}: {value}', { path: target.path, value }));
       }
     } else if (normalizedKind === 'range') {
       const number = Number(value);
       if ((rule.min !== undefined && number < Number(rule.min)) || (rule.max !== undefined && number > Number(rule.max))) {
-        pushDiagnostic(diagnostics, rule, target.path, rule.message || `超出范围 ${target.path}: ${value}`);
+        pushDiagnostic(diagnostics, rule, target.path, rule.message || formatAppLabel('diagnosticOutOfRange', '超出范围 {path}: {value}', { path: target.path, value }));
       }
     } else if (normalizedKind === 'pattern') {
       const pattern = new RegExp(rule.pattern);
       if (!pattern.test(String(value))) {
-        pushDiagnostic(diagnostics, rule, target.path, rule.message || `格式不匹配 ${target.path}`);
+        pushDiagnostic(diagnostics, rule, target.path, rule.message || formatAppLabel('diagnosticPatternMismatch', '格式不匹配 {path}', { path: target.path }));
       }
     } else if (normalizedKind === 'length') {
       const length = typeof value === 'string' || Array.isArray(value) ? value.length : 0;
       if ((rule.min !== undefined && length < Number(rule.min)) || (rule.max !== undefined && length > Number(rule.max))) {
-        pushDiagnostic(diagnostics, rule, target.path, rule.message || `长度不合法 ${target.path}: ${length}`);
+        pushDiagnostic(diagnostics, rule, target.path, rule.message || formatAppLabel('diagnosticInvalidLength', '长度不合法 {path}: {length}', { path: target.path, length }));
       }
     } else if (normalizedKind === 'items') {
       if (!Array.isArray(value)) {
-        pushDiagnostic(diagnostics, rule, target.path, rule.message || `应为数组：${target.path}`);
+        pushDiagnostic(diagnostics, rule, target.path, rule.message || formatAppLabel('diagnosticExpectedArray', '应为数组：{path}', { path: target.path }));
       } else if ((rule.min !== undefined && value.length < Number(rule.min)) || (rule.max !== undefined && value.length > Number(rule.max))) {
-        pushDiagnostic(diagnostics, rule, target.path, rule.message || `条目数量不合法 ${target.path}: ${value.length}`);
+        pushDiagnostic(diagnostics, rule, target.path, rule.message || formatAppLabel('diagnosticInvalidItemCount', '条目数量不合法 {path}: {length}', { path: target.path, length: value.length }));
       }
+    } else if (normalizedKind === 'diagnostics') {
+      const basePath = target.path.replace(/\.diagnostics$/, '');
+      ensureArray(value).forEach((issue) => {
+        const entry = issue && typeof issue === 'object'
+          ? issue
+          : { message: String(issue || '') };
+        if (!entry.message) {
+          return;
+        }
+        diagnostics.push({
+          path: basePath,
+          message: String(entry.message),
+          level: String(entry.level || rule.level || 'error')
+        });
+      });
     } else if (normalizedKind === 'refexists') {
       validateReferenceExists(value, rule, target.path, diagnostics);
     }
@@ -3455,7 +4421,7 @@ function validateReferenceExists(value, rule, pathText, diagnostics) {
   const valuePath = rule.value || refConfig?.value || 'id';
   const rows = ensureArray(getByPath(state.data, targetPath));
   if (!rows.some((row) => String(getByPath(row, valuePath)) === String(value))) {
-    pushDiagnostic(diagnostics, rule, pathText, rule.message || `引用不存在 ${pathText}: ${value}`);
+    pushDiagnostic(diagnostics, rule, pathText, rule.message || formatAppLabel('diagnosticMissingReference', '引用不存在 {path}: {value}', { path: pathText, value }));
   }
 }
 
@@ -3475,7 +4441,7 @@ function validateUnique(rulePath, diagnostics) {
       continue;
     }
     if (seen.has(value)) {
-      diagnostics.push({ path: `${arrayPath}[${index}].${key}`, message: `重复值 ${rulePath}: ${value}` });
+      diagnostics.push({ path: `${arrayPath}[${index}].${key}`, message: formatAppLabel('diagnosticDuplicateValue', '重复值 {path}: {value}', { path: rulePath, value }) });
     }
     seen.add(value);
   }
@@ -3491,7 +4457,7 @@ function validateExists(valuePath, targetPath, diagnostics) {
   const value = getByPath(state.data, valuePath);
   const rows = ensureArray(getByPath(state.data, arrayPath));
   if (value !== undefined && value !== null && value !== '' && !rows.some((row) => row?.[key] === value)) {
-    diagnostics.push({ path: valuePath, message: `引用不存在 ${valuePath} -> ${targetPath}: ${value}` });
+    diagnostics.push({ path: valuePath, message: formatAppLabel('diagnosticMissingReferenceTarget', '引用不存在 {path} -> {target}: {value}', { path: valuePath, target: targetPath, value }) });
   }
 }
 
@@ -3499,7 +4465,7 @@ function validateDanglingEdges(diagnostics) {
   const graph = buildGraphModel();
   for (const edge of graph.edges) {
     if (!graph.nodeMap.has(edge.to)) {
-      diagnostics.push({ path: edge.field || '', message: `连线目标不存在 ${edge.from} -> ${edge.to}` });
+      diagnostics.push({ path: edge.field || '', message: formatAppLabel('diagnosticDanglingEdge', '连线目标不存在 {from} -> {to}', { from: edge.from, to: edge.to }) });
     }
   }
 }
@@ -3703,12 +4669,13 @@ function escapeHtml(value) {
 }
 
 async function api(path, options = {}) {
+  const { headers: optionHeaders, ...requestOptions } = options;
   const response = await fetch(path, {
+    ...requestOptions,
     headers: {
       'Content-Type': 'application/json',
-      ...(options.headers || {})
-    },
-    ...options
+      ...fweSession.headers(optionHeaders)
+    }
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -3718,6 +4685,44 @@ async function api(path, options = {}) {
     throw error;
   }
   return data;
+}
+
+function createBrowserSession() {
+  const storageKey = 'fwe.browser-session.v1';
+  let id = '';
+  let handoff = false;
+  try {
+    const sharedId = String(new URL(window.location.href).searchParams.get(FWE_NAVIGATION_QUERY.sessionId) || '').trim();
+    if (/^[A-Za-z0-9._:-]{8,128}$/.test(sharedId)) {
+      id = sharedId;
+      handoff = true;
+    }
+  } catch {
+    id = '';
+  }
+  try {
+    if (!id) id = String(window.sessionStorage.getItem(storageKey) || '').trim();
+  } catch {
+    // Keep a valid navigation handoff id when storage is unavailable.
+  }
+  if (!/^[A-Za-z0-9._:-]{8,128}$/.test(id)) {
+    const random = window.crypto?.randomUUID?.()
+      || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    id = `browser-${random}`.replace(/[^A-Za-z0-9._:-]/g, '').slice(0, 128);
+    try {
+      window.sessionStorage.setItem(storageKey, id);
+    } catch {
+      // Storage can be unavailable in hardened browser contexts; the page-local ID still works.
+    }
+  }
+  return Object.freeze({
+    id,
+    handoff,
+    header: 'X-FWE-Session',
+    headers(input = {}) {
+      return { ...(input || {}), 'X-FWE-Session': id };
+    }
+  });
 }
 
 function setStatus(message, isError = false) {

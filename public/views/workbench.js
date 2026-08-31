@@ -184,8 +184,16 @@
       if (!renderer || typeof renderer.render !== 'function') {
         throw new Error(`Workbench layout "${layoutInfo.id}" is not registered.`);
       }
-      renderer.render(ctx, layoutInfo, buildWorkbench(layoutInfo, ctx));
-      ctx.renderInspector();
+      const workbench = buildWorkbench(layoutInfo, ctx);
+      renderer.render(ctx, layoutInfo, workbench);
+      const noInspector = typeof renderer.noInspector === 'function'
+        ? !!renderer.noInspector(ctx, layoutInfo, workbench)
+        : ctx.domain?.workbench?.inspector === false;
+      if (noInspector) {
+        ctx.hosts.inspectorForm.replaceChildren();
+      } else {
+        ctx.renderInspector();
+      }
     }
   });
 }());

@@ -12,12 +12,7 @@
     <header class="toolbar resource-bar">
       <div class="toolbar__group resource-bar__identity">
         <span id="appTitle" class="toolbar__title">fwe</span>
-        <span id="statusText" class="toolbar__status">加载中</span>
-      </div>
-      <div class="toolbar__group resource-bar__selectors">
-        <select id="groupSelect" title="分类"></select>
-        <select id="domainSelect" title="数据域"></select>
-        <select id="fileSelect" title="文件"></select>
+        <span id="statusText" class="toolbar__status" role="status" aria-live="polite">加载中</span>
       </div>
       <div class="toolbar__group resource-bar__actions">
         <button id="saveButton" type="button">保存</button>
@@ -32,6 +27,47 @@
         </div>
       </div>
     </header>
+
+    <section id="resourceContextBar" class="resource-context-bar">
+      <div class="resource-bar__selectors">
+        <div id="managedNavigation" class="managed-navigation hidden">
+          <label class="resource-selector-field">
+            <span id="workspaceSelectLabel">工作区</span>
+            <select id="workspaceSelect" title="工作区"></select>
+          </label>
+          <label class="resource-selector-field">
+            <span id="sectionSelectLabel">内容</span>
+            <select id="sectionSelect" title="内容"></select>
+          </label>
+        </div>
+        <div id="technicalNavigation" class="technical-navigation">
+          <label class="resource-selector-field">
+            <span id="groupSelectLabel">分类</span>
+            <select id="groupSelect" title="分类"></select>
+          </label>
+          <label class="resource-selector-field">
+            <span id="domainSelectLabel">数据域</span>
+            <select id="domainSelect" title="数据域"></select>
+          </label>
+        </div>
+        <label id="fileSelectorField" class="resource-selector-field">
+          <span id="fileSelectLabel">文件</span>
+          <select id="fileSelect" title="文件"></select>
+        </label>
+        <div class="resource-bar__project-context"></div>
+      </div>
+    </section>
+
+    <div class="work-area">
+      <nav id="managedSidebar" class="managed-sidebar hidden" aria-label="内容导航">
+        <div id="managedWorkspaceTabs" class="managed-sidebar__workspaces" role="tablist" aria-label="工作区"></div>
+        <div class="managed-sidebar__section-heading">
+          <strong id="managedSidebarTitle">内容</strong>
+        </div>
+        <div id="managedSectionList" class="managed-sidebar__sections"></div>
+      </nav>
+
+      <div class="work-area__content">
 
     <section id="surfaceHeader" class="surface-header hidden">
       <div class="surface-header__context">
@@ -69,7 +105,8 @@
             <div class="collection-browser__header">
               <div id="collectionTabs" class="collection-tabs"></div>
               <input id="collectionSearch" type="search" placeholder="搜索">
-              <div id="collectionLayoutTabs" class="collection-layout-tabs">
+              <div id="collectionFilters" class="collection-filters" hidden></div>
+              <div id="collectionLayoutTabs" class="collection-layout-tabs" role="group" aria-label="集合布局">
                 <button id="collectionDetailButton" type="button">详情</button>
                 <button id="collectionGridButton" type="button">网格</button>
               </div>
@@ -82,15 +119,15 @@
                 <h2 id="collectionTitle">集合</h2>
                 <div id="collectionSubtitle" class="collection-editor__subtitle"></div>
               </div>
-              <div id="collectionModeTabs" class="collection-mode-tabs"></div>
+              <div id="collectionModeTabs" class="collection-mode-tabs" role="tablist" aria-label="编辑模式"></div>
             </div>
-            <div id="collectionVariantTabs" class="collection-variant-tabs"></div>
-            <div id="collectionEditorBody" class="collection-editor__body"></div>
+            <div id="collectionVariantTabs" class="collection-variant-tabs" role="tablist" aria-label="内容变体"></div>
+            <div id="collectionEditorBody" class="collection-editor__body" role="tabpanel"></div>
           </section>
         </div>
         <div id="sidepanelWorkbench" class="sidepanel-workbench hidden">
           <aside class="sidepanel-sidebar">
-            <div id="sidepanelTabs" class="sidepanel-tabs"></div>
+            <div id="sidepanelTabs" class="sidepanel-tabs" role="tablist" aria-label="侧栏内容"></div>
             <div id="sidepanelList" class="sidepanel-file-list"></div>
           </aside>
           <section class="sidepanel-editor">
@@ -99,12 +136,12 @@
                 <h2 id="sidepanelTitle">编辑器</h2>
                 <div id="sidepanelSubtitle" class="sidepanel-editor__subtitle"></div>
               </div>
-              <div id="sidepanelModeTabs" class="sidepanel-mode-tabs hidden">
-                <button id="sidepanelFormModeButton" class="is-active" type="button">表单</button>
-                <button id="sidepanelJsonModeButton" type="button">JSON</button>
+              <div id="sidepanelModeTabs" class="sidepanel-mode-tabs hidden" role="tablist" aria-label="编辑模式">
+                <button id="sidepanelFormModeButton" class="is-active" type="button" role="tab" aria-selected="true">表单</button>
+                <button id="sidepanelJsonModeButton" type="button" role="tab" aria-selected="false" tabindex="-1">JSON</button>
               </div>
             </div>
-            <div id="sidepanelEditorBody" class="sidepanel-editor__body"></div>
+            <div id="sidepanelEditorBody" class="sidepanel-editor__body" role="tabpanel"></div>
           </section>
           <aside class="sidepanel-info">
             <section id="sidepanelReferencesCard" class="sidepanel-card">
@@ -137,11 +174,11 @@
         <div class="inspector__header">
           <h2 id="inspectorTitle">检查器</h2>
           <div class="inspector-mode-tabs" role="tablist" aria-label="检查器模式">
-            <button id="inspectorFormModeButton" class="is-active" type="button" data-mode="form">表单</button>
-            <button id="inspectorJsonModeButton" type="button" data-mode="json">JSON</button>
+            <button id="inspectorFormModeButton" class="is-active" type="button" data-mode="form" role="tab" aria-selected="true" aria-controls="inspectorFormView">表单</button>
+            <button id="inspectorJsonModeButton" type="button" data-mode="json" role="tab" aria-selected="false" aria-controls="inspectorJsonView" tabindex="-1">JSON</button>
           </div>
         </div>
-        <div id="inspectorFormView" class="inspector__body">
+        <div id="inspectorFormView" class="inspector__body" role="tabpanel" aria-labelledby="inspectorFormModeButton">
           <section id="domainSummaryCard" class="reference-card hidden">
             <div class="panel-title">数据域</div>
             <dl id="domainSummary" class="summary-list"></dl>
@@ -154,7 +191,7 @@
             <div id="inspectorForm" class="inspector-form"></div>
           </section>
         </div>
-        <div id="inspectorJsonView" class="inspector-json hidden">
+        <div id="inspectorJsonView" class="inspector-json hidden" role="tabpanel" aria-labelledby="inspectorJsonModeButton">
           <div class="inspector-json__toolbar">
             <span id="jsonScopeText" class="inspector-json__scope"></span>
             <button id="jsonApplyButton" type="button">应用</button>
@@ -165,6 +202,8 @@
         </div>
       </aside>
     </main>
+      </div>
+    </div>
   </div>
 
   <div id="graphContextMenu" class="context-menu hidden"></div>

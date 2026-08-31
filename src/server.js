@@ -14,6 +14,9 @@ const MODEL_TEMPLATES_DIR = path.join(TEMPLATES_DIR, 'models');
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 3219;
 const BODY_LIMIT = 8 * 1024 * 1024;
+const LAUNCH_REVISION_VERSION = 'fwe-launch-v1';
+const LAUNCH_REVISION_EXTENSIONS = new Set(['.cjs', '.css', '.fwe', '.html', '.js', '.json', '.mjs']);
+const LAUNCH_REVISION_IGNORED_DIRECTORIES = new Set(['.git', 'node_modules']);
 
 function parseArgs(argv, env = process.env) {
   const noBrowser = env.FWE_NO_BROWSER === '1';
@@ -182,6 +185,10 @@ function reuseRunningApp(app, runningApp, browserUrl, port, options = {}) {
     throw new Error(`Port ${port} is already serving${owner}, not "${app.title}".`);
   }
 
+  if (!runningApp.launchRevision || runningApp.launchRevision !== app.launchRevision) {
+    throw new Error(`"${app.title}" has an outdated server on port ${port}. Stop the old server and start again.`);
+  }
+
   const expectedRevision = app.labels && app.labels.editorRevision;
   const runningRevision = runningApp.labels && runningApp.labels.editorRevision;
   if (expectedRevision && runningRevision !== expectedRevision) {
@@ -203,23 +210,123 @@ function stripBom(text) {
   return String(text || '').replace(/^\uFEFF/, '');
 }
 
+function hashRevision(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function fileRevision(fullPath) {
+  return hashRevision(fs.readFileSync(fullPath));
+}
+
+function resourceRevision(resource) {
+  const type = resource?.type === 'text' ? 'text' : 'json';
+  const content = type === 'text'
+    ? String(resource?.content ?? '')
+    : JSON.stringify(resource?.data ?? resource?.content ?? null);
+  return hashRevision(`fwe-resource-v1\0${type}\0${content}`);
+}
+
+function revisionConflict(name, expected, actual) {
+  const label = String(name || 'resource');
+  return Object.assign(new Error(`Resource changed on disk: ${label}. Reload it before saving.`), {
+    status: 409,
+    issues: [{
+      path: '',
+      message: `Resource changed on disk: ${label}. Reload it before saving.`,
+      level: 'error',
+      code: 'revision-conflict',
+      expectedRevision: String(expected),
+      actualRevision: String(actual)
+    }]
+  });
+}
+
+function assertRevision(expected, actual, name) {
+  if (expected === undefined || expected === null) return;
+  if (String(expected) !== String(actual)) {
+    throw revisionConflict(name, expected, actual);
+  }
+}
+
 function readJsonFile(fullPath) {
   return JSON.parse(stripBom(fs.readFileSync(fullPath, 'utf8')));
 }
 
 function writeJsonFile(fullPath, data) {
-  ensureParent(fullPath);
-  fs.writeFileSync(fullPath, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+  writeFilesTransaction([{
+    fullPath,
+    content: `${JSON.stringify(data, null, 2)}\n`
+  }]);
 }
 
 function writeTextFile(fullPath, text) {
-  ensureParent(fullPath);
   const normalized = String(text || '').replace(/\r\n?/g, '\n').replace(/\s*$/, '');
-  fs.writeFileSync(fullPath, `${normalized}\n`, 'utf8');
+  writeFilesTransaction([{
+    fullPath,
+    content: `${normalized}\n`
+  }]);
 }
 
 function ensureParent(fullPath) {
   fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+}
+
+function sidecarPath(fullPath, kind) {
+  const token = `${process.pid}-${crypto.randomBytes(8).toString('hex')}`;
+  return path.join(path.dirname(fullPath), `.${path.basename(fullPath)}.${token}.${kind}`);
+}
+
+function writeFilesTransaction(entries) {
+  const prepared = [];
+  let committed = false;
+  try {
+    for (const entry of entries) {
+      const fullPath = path.normalize(entry.fullPath);
+      ensureParent(fullPath);
+      const tempPath = sidecarPath(fullPath, 'tmp');
+      fs.writeFileSync(tempPath, String(entry.content ?? ''), 'utf8');
+      prepared.push({
+        fullPath,
+        tempPath,
+        backupPath: sidecarPath(fullPath, 'bak'),
+        hadOriginal: false,
+        replaced: false
+      });
+    }
+
+    for (const item of prepared) {
+      if (fs.existsSync(item.fullPath)) {
+        fs.renameSync(item.fullPath, item.backupPath);
+        item.hadOriginal = true;
+      }
+      fs.renameSync(item.tempPath, item.fullPath);
+      item.replaced = true;
+    }
+    committed = true;
+  } catch (error) {
+    for (const item of [...prepared].reverse()) {
+      try {
+        if (item.replaced && fs.existsSync(item.fullPath)) {
+          fs.rmSync(item.fullPath, { force: true });
+        }
+        if (item.hadOriginal && fs.existsSync(item.backupPath)) {
+          fs.renameSync(item.backupPath, item.fullPath);
+        }
+      } catch {
+        // Keep any surviving backup beside the target for manual recovery.
+      }
+    }
+    throw error;
+  } finally {
+    for (const item of prepared) {
+      if (fs.existsSync(item.tempPath)) {
+        fs.rmSync(item.tempPath, { force: true });
+      }
+      if (committed && fs.existsSync(item.backupPath)) {
+        fs.rmSync(item.backupPath, { force: true });
+      }
+    }
+  }
 }
 
 function deepMerge(base, override) {
@@ -263,6 +370,110 @@ function labelFromId(value) {
 function isInside(parent, child) {
   const relative = path.relative(parent, child);
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function createLaunchRevision(appPath, appDir, workspaceDir, domainRefs, clientExtensions, extensionEntries) {
+  const files = new Set();
+  addLaunchRevisionFile(files, appPath);
+  addLaunchRevisionFile(files, path.join(FWE_ROOT, 'package.json'));
+  addLaunchRevisionFile(files, path.join(FWE_ROOT, 'bin', 'fwe.js'));
+  collectLaunchRevisionFiles(files, path.join(FWE_ROOT, 'src'));
+  collectLaunchRevisionFiles(files, path.join(FWE_ROOT, 'public'));
+  collectLaunchRevisionFiles(files, path.join(FWE_ROOT, 'templates'));
+  collectLaunchRevisionFiles(files, path.join(appDir, 'domains'));
+  collectLaunchRevisionFiles(files, path.join(appDir, 'extensions'));
+
+  for (const ref of domainRefs) {
+    if (typeof ref === 'string') {
+      addLaunchRevisionFile(files, path.resolve(appDir, ref));
+    }
+  }
+  for (const extension of clientExtensions) {
+    addLaunchRevisionFile(files, extension.path);
+  }
+  collectExtensionLaunchRevisionFiles(files, extensionEntries, appDir, workspaceDir);
+
+  if (fs.existsSync(appDir)) {
+    for (const entry of fs.readdirSync(appDir, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.toLowerCase().endsWith('.config.json')) {
+        addLaunchRevisionFile(files, path.join(appDir, entry.name));
+      }
+    }
+  }
+
+  const hash = crypto.createHash('sha256');
+  hash.update(`${LAUNCH_REVISION_VERSION}\0`);
+  hash.update(`${normalizeLaunchRevisionPath(appPath)}\0`);
+  for (const file of [...files].sort((left, right) => left.localeCompare(right))) {
+    hash.update(`${normalizeLaunchRevisionPath(file)}\0`);
+    hash.update(fs.readFileSync(file));
+    hash.update('\0');
+  }
+  return `${LAUNCH_REVISION_VERSION}:${hash.digest('hex')}`;
+}
+
+function collectExtensionLaunchRevisionFiles(files, entries, appDir, workspaceDir) {
+  const visited = new Set();
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const config = typeof entry === 'string' ? { path: entry } : entry || {};
+    if (!config.path || config.runtime === true) {
+      continue;
+    }
+    const extensionPath = path.resolve(appDir, config.path);
+    let resolvedPath;
+    try {
+      resolvedPath = require.resolve(extensionPath);
+    } catch {
+      continue;
+    }
+    collectCachedModuleFiles(files, require.cache[resolvedPath], appDir, workspaceDir, visited);
+  }
+}
+
+function collectCachedModuleFiles(files, module, appDir, workspaceDir, visited) {
+  if (!module?.filename) {
+    return;
+  }
+  const key = normalizeLaunchRevisionPath(module.filename);
+  if (visited.has(key)) {
+    return;
+  }
+  visited.add(key);
+  if (isInside(appDir, module.filename) || isInside(workspaceDir, module.filename)) {
+    addLaunchRevisionFile(files, module.filename);
+  }
+  for (const child of module.children || []) {
+    collectCachedModuleFiles(files, child, appDir, workspaceDir, visited);
+  }
+}
+
+function collectLaunchRevisionFiles(files, root) {
+  if (!fs.existsSync(root)) {
+    return;
+  }
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (entry.isDirectory() && LAUNCH_REVISION_IGNORED_DIRECTORIES.has(entry.name)) {
+      continue;
+    }
+    const fullPath = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      collectLaunchRevisionFiles(files, fullPath);
+    } else if (entry.isFile() && LAUNCH_REVISION_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
+      addLaunchRevisionFile(files, fullPath);
+    }
+  }
+}
+
+function addLaunchRevisionFile(files, file) {
+  const fullPath = path.resolve(file);
+  if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
+    files.add(fullPath);
+  }
+}
+
+function normalizeLaunchRevisionPath(file) {
+  const value = toPosix(path.resolve(file));
+  return process.platform === 'win32' ? value.toLowerCase() : value;
 }
 
 function resolveUnderWorkspace(workspaceDir, rawPath, label) {
@@ -365,6 +576,8 @@ function loadAppConfig(appPathInput) {
 
   assertUnique(app.domains.map((domain) => domain.id), 'domain id');
   app.revision = computeAppRevision(app);
+  app.navigation = normalizeAppNavigation(raw.navigation, app.domains);
+  app.launchRevision = createLaunchRevision(appPath, appDir, workspaceDir, domainRefs, clientExtensions, extensionEntries);
   return app;
 }
 
@@ -382,6 +595,65 @@ function computeAppRevision(app) {
     domains: app.domains,
     extensions
   })).digest('hex').slice(0, 16);
+}
+
+function normalizeAppNavigation(value, domains) {
+  if (!isPlainObject(value) || !Array.isArray(value.workspaces) || value.workspaces.length === 0) {
+    return null;
+  }
+
+  const domainById = new Map(domains.map((domain) => [domain.id, domain]));
+  const workspaceIds = new Set();
+  const sectionIds = new Set();
+  const workspaces = value.workspaces.map((workspace, workspaceIndex) => {
+    const id = String(workspace?.id || '').trim();
+    if (!id) throw new Error(`navigation.workspaces[${workspaceIndex}].id is required.`);
+    if (workspaceIds.has(id)) throw new Error(`Duplicate navigation workspace id: ${id}`);
+    workspaceIds.add(id);
+
+    const sections = Array.isArray(workspace.sections) ? workspace.sections : [];
+    if (sections.length === 0) throw new Error(`Navigation workspace "${id}" must include at least one section.`);
+    return {
+      id,
+      label: String(workspace.label || workspace.title || id),
+      sections: sections.map((section, sectionIndex) => {
+        const sectionId = String(section?.id || '').trim();
+        const domainId = String(section?.domainId || section?.domain || '').trim();
+        const collectionId = String(section?.collectionId || section?.collection || '').trim();
+        if (!sectionId) throw new Error(`navigation workspace "${id}" section ${sectionIndex + 1} requires id.`);
+        if (sectionIds.has(sectionId)) throw new Error(`Duplicate navigation section id: ${sectionId}`);
+        sectionIds.add(sectionId);
+        const domain = domainById.get(domainId);
+        if (!domain) throw new Error(`Navigation section "${sectionId}" references unknown domain: ${domainId}`);
+        if (collectionId) {
+          const collections = Array.isArray(domain.workbench?.collections) ? domain.workbench.collections : [];
+          if (!collections.some((collection) => collection.id === collectionId)) {
+            throw new Error(`Navigation section "${sectionId}" references unknown collection: ${domainId}/${collectionId}`);
+          }
+        }
+        return {
+          id: sectionId,
+          label: String(section.label || section.title || sectionId),
+          group: String(section.group || '').trim(),
+          domainId,
+          collectionId,
+          hideFile: section.hideFile === true
+        };
+      })
+    };
+  });
+
+  const defaultWorkspaceId = String(value.defaultWorkspaceId || value.defaultWorkspace || workspaces[0].id).trim();
+  if (!workspaceIds.has(defaultWorkspaceId)) {
+    throw new Error(`navigation.defaultWorkspace references unknown workspace: ${defaultWorkspaceId}`);
+  }
+  const defaultWorkspace = workspaces.find((workspace) => workspace.id === defaultWorkspaceId);
+  const defaultSectionId = String(value.defaultSectionId || value.defaultSection || defaultWorkspace.sections[0].id).trim();
+  if (!defaultWorkspace.sections.some((section) => section.id === defaultSectionId)) {
+    throw new Error(`navigation.defaultSection must belong to workspace "${defaultWorkspaceId}": ${defaultSectionId}`);
+  }
+
+  return { defaultWorkspaceId, defaultSectionId, workspaces };
 }
 
 function loadDomainConfig(ref, appDir, options = {}) {
@@ -1100,7 +1372,9 @@ function publicApp(app) {
     id: app.id,
     title: app.title,
     revision: app.revision,
+    launchRevision: app.launchRevision,
     labels: app.labels || {},
+    navigation: app.navigation || null,
     workspace: toPosix(path.relative(app.appDir, app.workspaceDir)) || '.',
     domains: app.domains.map((domain) => ({
       id: domain.id,
@@ -1236,7 +1510,7 @@ function sourceAction(provider, names) {
   return null;
 }
 
-function sourceContext(app, domain, rawName = '') {
+function sourceContext(app, domain, rawName = '', sessionId = 'default') {
   const source = domain.source || {};
   const sourceBase = source.path
     ? resolveUnderWorkspace(app.workspaceDir, source.path, `domain "${domain.id}" source.path`)
@@ -1251,6 +1525,7 @@ function sourceContext(app, domain, rawName = '') {
     domain,
     source,
     name: rawName,
+    sessionId,
     workspaceDir: app.workspaceDir,
     appDir: app.appDir,
     sourceDir: sourceBase,
@@ -1315,85 +1590,109 @@ function normalizeSourceFileEntry(entry, index = 0) {
 
 function normalizeSourceReadResult(result, rawName) {
   const source = result && typeof result === 'object' && !Array.isArray(result) ? result : null;
+  let normalized;
   if (source && (Object.prototype.hasOwnProperty.call(source, 'data') || Object.prototype.hasOwnProperty.call(source, 'content'))) {
     const type = source.type || (Object.prototype.hasOwnProperty.call(source, 'data') ? 'json' : 'text');
     const data = Object.prototype.hasOwnProperty.call(source, 'data') ? source.data : undefined;
     const content = source.content ?? (type === 'json' ? JSON.stringify(data, null, 2) : '');
-    return {
+    normalized = {
       name: source.name || rawName,
       path: source.path || '',
       type,
       ...(source.revision !== undefined ? { revision: String(source.revision) } : {}),
+      ...(source.meta !== undefined ? { meta: source.meta } : {}),
       ...(data !== undefined ? { data } : {}),
       content
     };
+  } else if (typeof result === 'string') {
+    normalized = { name: rawName, path: '', type: 'text', content: result };
+  } else {
+    normalized = {
+      name: rawName,
+      path: '',
+      type: 'json',
+      data: result,
+      content: JSON.stringify(result, null, 2)
+    };
   }
-  if (typeof result === 'string') {
-    return { name: rawName, path: '', type: 'text', content: result };
+  if (normalized.revision === undefined) {
+    normalized.revision = resourceRevision(normalized);
   }
-  return {
-    name: rawName,
-    path: '',
-    type: 'json',
-    data: result,
-    content: JSON.stringify(result, null, 2)
-  };
+  return normalized;
 }
 
-async function listSourceProviderFiles(app, domain, provider) {
+async function listSourceProviderFiles(app, domain, provider, sessionId = 'default') {
   const list = sourceAction(provider, ['list', 'listFiles', 'files']);
   if (list) {
-    const result = await list(sourceContext(app, domain));
+    const result = await list(sourceContext(app, domain, '', sessionId));
     return (Array.isArray(result) ? result : []).map((entry, index) => normalizeSourceFileEntry(entry, index));
   }
   return [];
 }
 
-async function readSourceProviderFile(app, domain, provider, rawName) {
+async function readSourceProviderFile(app, domain, provider, rawName, sessionId = 'default') {
   const read = sourceAction(provider, ['read', 'readFile', 'open']);
   if (!read) {
     throw Object.assign(new Error(`Source provider "${sourceProviderName(app, domain)}" does not implement read().`), { status: 501 });
   }
-  const result = await read(sourceContext(app, domain, rawName), rawName);
+  const result = await read(sourceContext(app, domain, rawName, sessionId), rawName);
   return normalizeSourceReadResult(result, rawName);
 }
 
-async function writeSourceProviderFile(app, domain, provider, rawName, payload) {
+async function writeSourceProviderFile(app, domain, provider, rawName, payload, sessionId = 'default') {
   const write = sourceAction(provider, ['write', 'save', 'saveFile']);
   if (!write) {
     throw Object.assign(new Error(`Source provider "${sourceProviderName(app, domain)}" does not implement write().`), { status: 501 });
   }
-  const result = await write(sourceContext(app, domain, rawName), rawName, payload);
+  if (payload?.revision !== undefined) {
+    const current = await readSourceProviderFile(app, domain, provider, rawName, sessionId);
+    assertRevision(payload.revision, current.revision, rawName);
+  }
+  const result = await write(sourceContext(app, domain, rawName, sessionId), rawName, payload);
+  let revision = result?.revision !== undefined ? String(result.revision) : '';
+  if (!revision) {
+    try {
+      const reopened = await readSourceProviderFile(app, domain, provider, result?.name || rawName, sessionId);
+      revision = reopened.revision;
+    } catch {
+      revision = resourceRevision({
+        type: Object.prototype.hasOwnProperty.call(payload || {}, 'data') ? 'json' : 'text',
+        data: payload?.data,
+        content: payload?.content
+      });
+    }
+  }
   return {
     ok: true,
     name: result?.name || rawName,
     path: result?.path || '',
-    ...(result?.revision !== undefined ? { revision: String(result.revision) } : {})
+    revision,
+    ...(result?.meta !== undefined ? { meta: result.meta } : {})
   };
 }
 
-async function createSourceProviderFile(app, domain, provider, payload) {
+async function createSourceProviderFile(app, domain, provider, payload, sessionId = 'default') {
   const create = sourceAction(provider, ['create', 'newFile']);
   if (!create) {
     throw Object.assign(new Error(`Source provider "${sourceProviderName(app, domain)}" does not implement create().`), { status: 501 });
   }
-  const result = await create(sourceContext(app, domain, payload?.name || ''), payload || {});
+  const result = await create(sourceContext(app, domain, payload?.name || '', sessionId), payload || {});
   return result || { ok: true };
 }
 
-async function deleteSourceProviderFile(app, domain, provider, rawName) {
+async function deleteSourceProviderFile(app, domain, provider, rawName, sessionId = 'default') {
   const remove = sourceAction(provider, ['delete', 'remove', 'deleteFile']);
   if (!remove) {
     throw Object.assign(new Error(`Source provider "${sourceProviderName(app, domain)}" does not implement delete().`), { status: 501 });
   }
-  const result = await remove(sourceContext(app, domain, rawName), rawName);
+  const result = await remove(sourceContext(app, domain, rawName, sessionId), rawName);
   return result || { ok: true, name: rawName };
 }
 
-function listFiles(app, domain) {
+function listFiles(app, domain, sessionId = 'default') {
   const provider = sourceProvider(app, domain);
   if (provider) {
-    return listSourceProviderFiles(app, domain, provider);
+    return listSourceProviderFiles(app, domain, provider, sessionId);
   }
 
   const source = domain.source || {};
@@ -1507,10 +1806,10 @@ function filePathForName(app, domain, rawName) {
   return fullPath;
 }
 
-function readDomainFile(app, domain, rawName) {
+function readDomainFile(app, domain, rawName, sessionId = 'default') {
   const provider = sourceProvider(app, domain);
   if (provider) {
-    return readSourceProviderFile(app, domain, provider, rawName);
+    return readSourceProviderFile(app, domain, provider, rawName, sessionId);
   }
 
   if (domain.source?.type === 'multi-json') {
@@ -1520,7 +1819,8 @@ function readDomainFile(app, domain, rawName) {
       path: '',
       type: 'json',
       data,
-      content: JSON.stringify(data, null, 2)
+      content: JSON.stringify(data, null, 2),
+      revision: multiJsonRevision(app, domain)
     };
   }
 
@@ -1535,19 +1835,33 @@ function readDomainFile(app, domain, rawName) {
   const text = stripBom(fs.readFileSync(fullPath, 'utf8'));
   if (isJsonSource(domain)) {
     const data = JSON.parse(text);
-    return { name, path: toPosix(path.relative(app.workspaceDir, fullPath)), type: 'json', data, content: JSON.stringify(data, null, 2) };
+    return {
+      name,
+      path: toPosix(path.relative(app.workspaceDir, fullPath)),
+      type: 'json',
+      data,
+      content: JSON.stringify(data, null, 2),
+      revision: fileRevision(fullPath)
+    };
   }
 
-  return { name, path: toPosix(path.relative(app.workspaceDir, fullPath)), type: 'text', content: text };
+  return {
+    name,
+    path: toPosix(path.relative(app.workspaceDir, fullPath)),
+    type: 'text',
+    content: text,
+    revision: fileRevision(fullPath)
+  };
 }
 
-function writeDomainFile(app, domain, rawName, payload) {
+function writeDomainFile(app, domain, rawName, payload, sessionId = 'default') {
   const provider = sourceProvider(app, domain);
   if (provider) {
-    return writeSourceProviderFile(app, domain, provider, rawName, payload);
+    return writeSourceProviderFile(app, domain, provider, rawName, payload, sessionId);
   }
 
   if (domain.source?.type === 'multi-json') {
+    assertRevision(payload?.revision, multiJsonRevision(app, domain), rawName);
     const data = payload && Object.prototype.hasOwnProperty.call(payload, 'data')
       ? payload.data
       : JSON.parse(String(payload?.content || '{}'));
@@ -1555,11 +1869,15 @@ function writeDomainFile(app, domain, rawName, payload) {
     return {
       ok: true,
       name: domain.source.fileName || domain.defaults?.fileName || `${domain.id}.json`,
-      path: ''
+      path: '',
+      revision: multiJsonRevision(app, domain)
     };
   }
 
   const fullPath = filePathForName(app, domain, rawName);
+  if (fs.existsSync(fullPath)) {
+    assertRevision(payload?.revision, fileRevision(fullPath), rawName);
+  }
   if (isJsonSource(domain)) {
     const data = payload && Object.prototype.hasOwnProperty.call(payload, 'data')
       ? payload.data
@@ -1572,14 +1890,15 @@ function writeDomainFile(app, domain, rawName, payload) {
   return {
     ok: true,
     name: isFolderSource(domain) ? safeRelativeName(rawName) : path.basename(fullPath),
-    path: toPosix(path.relative(app.workspaceDir, fullPath))
+    path: toPosix(path.relative(app.workspaceDir, fullPath)),
+    revision: fileRevision(fullPath)
   };
 }
 
-async function createDomainFile(app, domain, payload) {
+async function createDomainFile(app, domain, payload, sessionId = 'default') {
   const provider = sourceProvider(app, domain);
   if (provider) {
-    return createSourceProviderFile(app, domain, provider, payload);
+    return createSourceProviderFile(app, domain, provider, payload, sessionId);
   }
 
   const name = safeRelativeName(payload?.name || domain.defaults?.fileName || (domain.kind === 'text' ? 'new.txt' : 'new.json'));
@@ -1589,13 +1908,13 @@ async function createDomainFile(app, domain, payload) {
   const dataPayload = domain.kind === 'text'
     ? { content: payload?.content ?? domain.defaults?.text ?? '' }
     : { data: payload?.data ?? clone(domain.defaults?.data || {}) };
-  return writeDomainFile(app, domain, name, dataPayload);
+  return writeDomainFile(app, domain, name, dataPayload, sessionId);
 }
 
-function deleteDomainFile(app, domain, rawName) {
+function deleteDomainFile(app, domain, rawName, sessionId = 'default') {
   const provider = sourceProvider(app, domain);
   if (provider) {
-    return deleteSourceProviderFile(app, domain, provider, rawName);
+    return deleteSourceProviderFile(app, domain, provider, rawName, sessionId);
   }
 
   if (domain.source?.type === 'multi-json') {
@@ -1640,10 +1959,22 @@ function readMultiJsonDomain(app, domain) {
 }
 
 function writeMultiJsonDomain(app, domain, data) {
-  normalizeMultiJsonFiles(domain).forEach((entry) => {
+  const entries = normalizeMultiJsonFiles(domain).map((entry) => {
     const fullPath = resolveUnderWorkspace(app.workspaceDir, entry.path, `domain "${domain.id}" source.files.${entry.key}`);
-    writeJsonFile(fullPath, getByPathServer(data, entry.targetPath) ?? null);
+    return {
+      fullPath,
+      content: `${JSON.stringify(getByPathServer(data, entry.targetPath) ?? null, null, 2)}\n`
+    };
   });
+  writeFilesTransaction(entries);
+}
+
+function multiJsonRevision(app, domain) {
+  const parts = normalizeMultiJsonFiles(domain).map((entry) => {
+    const fullPath = resolveUnderWorkspace(app.workspaceDir, entry.path, `domain "${domain.id}" source.files.${entry.key}`);
+    return `${toPosix(entry.path)}\0${fs.existsSync(fullPath) ? fileRevision(fullPath) : 'missing'}`;
+  });
+  return hashRevision(`fwe-multi-json-v1\0${parts.join('\0')}`);
 }
 
 function getByPathServer(root, pathText) {
@@ -1695,9 +2026,9 @@ function sendJson(res, status, data) {
   res.end(JSON.stringify(data, null, 2));
 }
 
-function sendText(res, status, text) {
+function sendText(res, status, text, contentType = 'text/plain; charset=utf-8') {
   res.writeHead(status, {
-    'Content-Type': 'text/plain; charset=utf-8',
+    'Content-Type': contentType,
     'Cache-Control': 'no-store'
   });
   res.end(text);
@@ -1730,7 +2061,19 @@ function parseRequestJson(body) {
   return JSON.parse(stripBom(body || '{}'));
 }
 
+function requestSessionId(req) {
+  const rawHeader = req?.headers?.['x-fwe-session'];
+  const raw = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
+  const value = String(raw || '').trim();
+  if (!value) return 'default';
+  if (!/^[A-Za-z0-9._:-]{8,128}$/.test(value)) {
+    throw Object.assign(new Error('Invalid X-FWE-Session header.'), { status: 400 });
+  }
+  return value;
+}
+
 async function handleApi(app, req, res, url, control = {}) {
+  const sessionId = requestSessionId(req);
   if (req.method === 'GET' && url.pathname === '/api/app') {
     sendJson(res, 200, publicApp(app));
     return;
@@ -1769,13 +2112,13 @@ async function handleApi(app, req, res, url, control = {}) {
   if (filesMatch) {
     const domain = findDomain(app, decodeURIComponent(filesMatch[1]));
     if (req.method === 'GET') {
-      sendJson(res, 200, { files: await listFiles(app, domain) });
+      sendJson(res, 200, { files: await listFiles(app, domain, sessionId) });
       return;
     }
     if (req.method === 'POST') {
       const body = await readBody(req);
       const payload = parseRequestJson(body);
-      sendJson(res, 200, await createDomainFile(app, domain, payload));
+      sendJson(res, 200, await createDomainFile(app, domain, payload, sessionId));
       return;
     }
   }
@@ -1785,19 +2128,19 @@ async function handleApi(app, req, res, url, control = {}) {
     const domain = findDomain(app, decodeURIComponent(fileMatch[1]));
     const name = decodeURIComponent(fileMatch[2]);
     if (req.method === 'GET') {
-      sendJson(res, 200, await readDomainFile(app, domain, name));
+      sendJson(res, 200, await readDomainFile(app, domain, name, sessionId));
       return;
     }
 
     if (req.method === 'PUT') {
       const body = await readBody(req);
       const payload = parseRequestJson(body);
-      sendJson(res, 200, await writeDomainFile(app, domain, name, payload));
+      sendJson(res, 200, await writeDomainFile(app, domain, name, payload, sessionId));
       return;
     }
 
     if (req.method === 'DELETE') {
-      sendJson(res, 200, await deleteDomainFile(app, domain, name));
+      sendJson(res, 200, await deleteDomainFile(app, domain, name, sessionId));
       return;
     }
   }
@@ -1807,6 +2150,7 @@ async function handleApi(app, req, res, url, control = {}) {
     req,
     res,
     url,
+    sessionId,
     sendJson: (status, data) => sendJson(res, status, data),
     sendText: (status, text, contentType) => sendText(res, status, text, contentType),
     readBody: () => readBody(req),
