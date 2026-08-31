@@ -53,6 +53,7 @@ function compileFweDsl(text, options = {}) {
   const domain = {
     id,
     title: directives.title || titleFromId(id),
+    ...(directives.group ? { group: directives.group } : {}),
     schema: {
       language: 'fwe',
       root: directives.root || '',
@@ -196,7 +197,7 @@ function lineForIndex(text, index) {
 
 function parseDirectives(text) {
   const directives = { uses: [] };
-  const allowed = new Set(['id', 'title', 'source', 'root', 'graph', 'text', 'columns', 'file', 'use']);
+  const allowed = new Set(['id', 'title', 'group', 'source', 'root', 'graph', 'text', 'columns', 'file', 'use']);
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line) {
@@ -215,6 +216,8 @@ function parseDirectives(text) {
       directives.id = parseTokenValue(value);
     } else if (key === 'title') {
       directives.title = parseTokenValue(value);
+    } else if (key === 'group') {
+      directives.group = parseTokenValue(value);
     } else if (key === 'source') {
       directives.source = parseSourceDirective(parseTokenValue(value));
     } else if (key === 'root') {
@@ -305,16 +308,16 @@ function parseSourceDirective(value) {
 function parseGraphDirective(value) {
   const tokens = String(value || '').trim().split(/\s+/).filter(Boolean);
   if (!tokens.length) {
-    throw new Error('Graph directive needs a mode: route-lane or free.');
+    throw new Error('Graph directive needs a mode: route-lane, tree, or free.');
   }
   const mode = tokens[0];
-  if (!['route-lane', 'fixed', 'free'].includes(mode)) {
+  if (!['route-lane', 'fixed', 'tree', 'free'].includes(mode)) {
     throw new Error(`Unknown graph mode: ${mode}`);
   }
   const result = {
     mode,
     layout: mode === 'free' ? 'free' : 'fixed',
-    algorithm: mode === 'free' ? 'free' : 'route-lane'
+    algorithm: mode === 'free' ? 'free' : (mode === 'tree' ? 'tree' : 'route-lane')
   };
   const gridIndex = tokens.indexOf('grid');
   if (gridIndex >= 0 && tokens[gridIndex + 1]) {
@@ -374,14 +377,17 @@ function parseBlueprintNodeBlock(child, parsed, options) {
     id: child.name,
     title: parsed.title || titleFromId(child.name),
     label: parsed.label || parsed.title || titleFromId(child.name),
+    description: parsed.description || '',
     color: parsed.color || '',
+    category: parsed.category || '',
+    icon: parsed.icon || '',
     ports: [],
     line: parsed.line
   };
 
   for (const rawLine of child.body.split(/\r?\n/)) {
     const line = stripDslInlineComment(rawLine).trim();
-    if (!line || /^(title|label|color)\b/.test(line)) {
+    if (!line || /^(title|label|description|color|category|icon)\b/.test(line)) {
       continue;
     }
 
@@ -506,7 +512,7 @@ function applyViewDirectives(directives, options) {
     }
     if (view.type === 'graph' || view.type === 'blueprint') {
       if (!view.layout && !directives.graph) {
-        throw dslError(options, `view ${view.type} needs layout: route-lane or free.`, view.line);
+        throw dslError(options, `view ${view.type} needs layout: route-lane, tree, or free.`, view.line);
       }
       if (view.layout) {
         directives.graph = parseGraphDirective(view.layout);
@@ -912,17 +918,22 @@ function compileBlueprintSpec(view, nodesPath, nodeId, position) {
   const values = view.values || 'values';
   const edges = view.edges || 'edges';
   return {
+    profile: view.profile || '',
     nodes: view.target || nodesPath || 'nodes',
     edges,
     nodeId: nodeId || 'id',
     nodeType,
     values,
+    note: view.note || '',
     position: typeof position === 'string' ? position : (position?.runtime || view.position || 'pos'),
     types: (view.nodeTypes || []).map((node) => ({
       id: node.id,
       title: node.title || node.label || titleFromId(node.id),
       label: node.label || node.title || titleFromId(node.id),
+      description: node.description || '',
       color: node.color || '',
+      category: node.category || '',
+      icon: node.icon || '',
       ports: (node.ports || []).map((port) => ({
         id: port.id,
         label: port.label || titleFromId(port.id),
@@ -974,6 +985,12 @@ function applyViewsToDomain(domain, directives, context, options) {
 
     if (view.type === 'graph' || view.type === 'blueprint') {
       domain.kind = 'graph';
+      if (view.profile) {
+        domain.graph = {
+          ...(domain.graph || {}),
+          profile: view.profile
+        };
+      }
       if (view.type === 'blueprint') {
         domain.graph = {
           ...(domain.graph || {}),
@@ -1314,6 +1331,7 @@ function compileViewCollections(view, context, options) {
       idPath: item.idPath || key?.name || 'id',
       title: item.title || 'name',
       subtitle: item.subtitle || [],
+      ...(item.subtitleTemplate ? { subtitleTemplate: item.subtitleTemplate } : {}),
       search: item.search || [],
       modes: normalizeViewModes(modeList, formName),
       list: list.map((layout) => typeof layout === 'string' ? layout : layout.id).filter(Boolean),

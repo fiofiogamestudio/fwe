@@ -1,4 +1,5 @@
 const http = require('http');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
@@ -22,6 +23,7 @@ function parseArgs(argv, env = process.env) {
     port: env.PORT || env.FWE_PORT || '',
     check: false,
     explain: '',
+    replace: false,
     open: !noBrowser && env.FWE_OPEN_BROWSER === '1'
   };
 
@@ -41,6 +43,8 @@ function parseArgs(argv, env = process.env) {
       args.open = true;
     } else if (arg === '--no-open') {
       args.open = false;
+    } else if (arg === '--replace') {
+      args.replace = true;
     } else if (arg === '--help' || arg === '-h') {
       args.help = true;
     } else {
@@ -67,6 +71,7 @@ Options:
   --port <port>  Bind port. Default: app config port or 3219
   --open         Open the app in the default browser after the server starts
   --no-open      Do not open the browser, even if FWE_OPEN_BROWSER=1
+  --replace      Restart the same FWE app when the target port is already active
   --check        Validate config and exit
   --explain <id|path>
                  Print one compiled runtime domain and exit
@@ -139,6 +144,37 @@ function requestPublicApp(browserUrl, timeoutMs = 1200) {
   });
 }
 
+function requestStop(browserUrl, appId, timeoutMs = 1200) {
+  return new Promise((resolve) => {
+    const target = new URL(`${browserUrl}/api/app/stop`);
+    const request = http.request({
+      hostname: target.hostname,
+      port: target.port,
+      path: target.pathname,
+      method: 'POST',
+      headers: { 'X-FWE-App': appId },
+      timeout: timeoutMs
+    }, (response) => {
+      response.resume();
+      response.on('end', () => resolve(response.statusCode === 200));
+    });
+    request.once('timeout', () => request.destroy());
+    request.once('error', () => resolve(false));
+    request.end();
+  });
+}
+
+async function waitForStop(browserUrl, timeoutMs = 3000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (!await requestPublicApp(browserUrl, 250)) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 60));
+  }
+  return false;
+}
+
 function reuseRunningApp(app, runningApp, browserUrl, port, options = {}) {
   if (!runningApp) return false;
   if (runningApp.id !== app.id) {
@@ -150,6 +186,9 @@ function reuseRunningApp(app, runningApp, browserUrl, port, options = {}) {
   const runningRevision = runningApp.labels && runningApp.labels.editorRevision;
   if (expectedRevision && runningRevision !== expectedRevision) {
     throw new Error(`"${app.title}" is already running on port ${port}, but its revision is different. Stop the old server and start again.`);
+  }
+  if (runningApp.revision !== app.revision) {
+    throw new Error(`"${app.title}" is already running on port ${port}, but its source revision is different. Restart it with --replace.`);
   }
 
   console.log(`[fwe] ${app.title} is already running at ${browserUrl}`);
@@ -325,7 +364,24 @@ function loadAppConfig(appPathInput) {
   };
 
   assertUnique(app.domains.map((domain) => domain.id), 'domain id');
+  app.revision = computeAppRevision(app);
   return app;
+}
+
+function computeAppRevision(app) {
+  const extensions = app.clientExtensions.map((entry) => ({
+    id: entry.id,
+    name: entry.name,
+    source: fs.readFileSync(entry.path, 'utf8')
+  }));
+  return crypto.createHash('sha256').update(JSON.stringify({
+    id: app.id,
+    title: app.title,
+    labels: app.labels,
+    workspace: app.workspaceDir,
+    domains: app.domains,
+    extensions
+  })).digest('hex').slice(0, 16);
 }
 
 function loadDomainConfig(ref, appDir, options = {}) {
@@ -1043,11 +1099,13 @@ function publicApp(app) {
   return {
     id: app.id,
     title: app.title,
+    revision: app.revision,
     labels: app.labels || {},
     workspace: toPosix(path.relative(app.appDir, app.workspaceDir)) || '.',
     domains: app.domains.map((domain) => ({
       id: domain.id,
       title: domain.title,
+      group: domain.group || '',
       format: domain.format,
       kind: domain.kind,
       modelTemplate: domain.modelTemplate || '',
@@ -1353,7 +1411,8 @@ function listFiles(app, domain) {
     return [{
       name: path.basename(fullPath),
       path: toPosix(path.relative(app.workspaceDir, fullPath)),
-      exists: fs.existsSync(fullPath)
+      exists: fs.existsSync(fullPath),
+      ...(source.type === 'single-json' ? readJsonFileAlias(fullPath) : {})
     }];
   }
 
@@ -1372,12 +1431,29 @@ function listFiles(app, domain) {
       files.push({
         name: toPosix(path.relative(fullPath, filePath)),
         path: toPosix(path.relative(app.workspaceDir, filePath)),
-        exists: true
+        exists: true,
+        ...(source.type === 'folder-json' ? readJsonFileAlias(filePath) : {})
       });
     }
   });
   files.sort((a, b) => a.name.localeCompare(b.name));
   return files;
+}
+
+function readJsonFileAlias(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return {};
+  }
+  try {
+    const value = JSON.parse(stripBom(fs.readFileSync(filePath, 'utf8')));
+    const alias = value && typeof value === 'object' && !Array.isArray(value)
+      ? String(value.alias || '').trim()
+      : '';
+    return alias ? { alias } : {};
+  } catch {
+    // Listing remains available; opening the malformed file reports the parse error.
+    return {};
+  }
 }
 
 function normalizeExtensions(value) {
@@ -1654,9 +1730,20 @@ function parseRequestJson(body) {
   return JSON.parse(stripBom(body || '{}'));
 }
 
-async function handleApi(app, req, res, url) {
+async function handleApi(app, req, res, url, control = {}) {
   if (req.method === 'GET' && url.pathname === '/api/app') {
     sendJson(res, 200, publicApp(app));
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/app/stop') {
+    if (!isLoopbackAddress(req.socket.remoteAddress)
+        || String(req.headers['x-fwe-app'] || '') !== app.id) {
+      sendJson(res, 403, { error: 'FWE stop request was rejected.' });
+      return;
+    }
+    sendJson(res, 200, { ok: true });
+    setImmediate(() => control.stop?.());
     return;
   }
 
@@ -1737,7 +1824,12 @@ function startServer(app, host, port, options = {}) {
     const url = new URL(req.url, `http://${req.headers.host || `${host}:${port}`}`);
     try {
       if (url.pathname.startsWith('/api/')) {
-        await handleApi(app, req, res, url);
+        await handleApi(app, req, res, url, {
+          stop() {
+            server.close();
+            server.closeIdleConnections?.();
+          }
+        });
         return;
       }
       serveStatic(url.pathname, res);
@@ -1766,6 +1858,11 @@ function startServer(app, host, port, options = {}) {
       resolve(server);
     });
   });
+}
+
+function isLoopbackAddress(address) {
+  const value = String(address || '').toLowerCase();
+  return value === '127.0.0.1' || value === '::1' || value === '::ffff:127.0.0.1';
 }
 
 function explainDomain(args) {
@@ -1820,12 +1917,21 @@ async function main(argv) {
 
   const browserUrl = urlForBrowser(host, port);
   const runningApp = await requestPublicApp(browserUrl);
-  if (reuseRunningApp(app, runningApp, browserUrl, port, { open: args.open })) {
+  if (runningApp && args.replace) {
+    if (runningApp.id !== app.id) {
+      const owner = runningApp.title ? ` "${runningApp.title}"` : '';
+      throw new Error(`Port ${port} is already serving${owner}, not "${app.title}".`);
+    }
+    if (!await requestStop(browserUrl, app.id) || !await waitForStop(browserUrl)) {
+      throw new Error(`Could not replace "${app.title}" on port ${port}.`);
+    }
+  }
+  if (!args.replace && reuseRunningApp(app, runningApp, browserUrl, port, { open: args.open })) {
     return;
   }
 
   try {
-    await startServer(app, host, port, { open: args.open });
+    return await startServer(app, host, port, { open: args.open });
   } catch (error) {
     if (error && error.code === 'EADDRINUSE') {
       const racedApp = await requestPublicApp(browserUrl);
@@ -1849,6 +1955,7 @@ module.exports = {
   writeDomainFile,
   buildApiErrorPayload,
   requestPublicApp,
+  requestStop,
   reuseRunningApp,
   startServer
 };
