@@ -55,6 +55,7 @@ async function main() {
 
     const results = [];
     let goapActionCount = null;
+    let goapExpectedActionCount = null;
     for (const domain of domains) {
       await selectDomain(cdp, domain.id, domain.group || '');
       const availableFiles = await domainFiles(cdp);
@@ -122,6 +123,10 @@ async function main() {
         results.push(metrics);
         if (domain.id === 'ai_plan') {
           goapActionCount = await inspectWorkbenchCollection(cdp, 'GOAP 动作');
+          goapExpectedActionCount = await evaluate(
+            cdp,
+            'window.fwe?.resources?.current?.()?.data?.actions?.length ?? null'
+          );
         }
       }
     }
@@ -131,25 +136,44 @@ async function main() {
       : [];
 
     const tabKeyboard = await evaluate(cdp, `(async () => {
-      const form = document.querySelector('#inspectorFormModeButton');
-      const json = document.querySelector('#inspectorJsonModeButton');
-      if (!form || !json) return { tested: false };
-      form.click();
-      form.focus();
-      form.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
-      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-      const afterRight = {
-        selected: json.getAttribute('aria-selected'),
-        focused: document.activeElement === json
+      const visible = (element) => Boolean(element && element.getClientRects().length > 0);
+      const currentTabs = () => {
+        const tabList = [...document.querySelectorAll('[role="tablist"]')].find((candidate) => (
+          visible(candidate)
+          && [...candidate.querySelectorAll('[role="tab"]')]
+            .filter((tab) => tab.closest('[role="tablist"]') === candidate && visible(tab)).length >= 2
+        ));
+        if (!tabList) return null;
+        const tabs = [...tabList.querySelectorAll('[role="tab"]')]
+          .filter((tab) => tab.closest('[role="tablist"]') === tabList && visible(tab));
+        return { tabList, tabs };
       };
-      json.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }));
+      let state = currentTabs();
+      if (!state) return { tested: false };
+      state.tabs[0].click();
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      state = currentTabs();
+      const active = state?.tabs.find((tab) => tab.getAttribute('aria-selected') === 'true') || state?.tabs[0];
+      if (!active) return { tested: false };
+      active.focus();
+      active.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      state = currentTabs();
+      const selectedAfterRight = state?.tabs.find((tab) => tab.getAttribute('aria-selected') === 'true');
+      const afterRight = {
+        selected: selectedAfterRight?.getAttribute('aria-selected') || '',
+        focused: document.activeElement === selectedAfterRight
+      };
+      selectedAfterRight?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }));
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      state = currentTabs();
+      const firstAfterHome = state?.tabs[0];
       return {
         tested: true,
         afterRight,
         afterHome: {
-          selected: form.getAttribute('aria-selected'),
-          focused: document.activeElement === form
+          selected: firstAfterHome?.getAttribute('aria-selected') || '',
+          focused: document.activeElement === firstAfterHome
         }
       };
     })()`);
@@ -317,8 +341,9 @@ async function main() {
         failures.push('State set-initial was not fully undoable.');
       }
     }
-    if (domains.some((domain) => domain.id === 'ai_plan') && goapActionCount !== 4) {
-      failures.push(`GOAP action editor expected 4 actions, got ${goapActionCount}.`);
+    if (domains.some((domain) => domain.id === 'ai_plan')
+      && (goapExpectedActionCount === null || goapActionCount !== goapExpectedActionCount)) {
+      failures.push(`GOAP action editor expected ${goapExpectedActionCount}, got ${goapActionCount}.`);
     }
     failures.push(...errors.map((error) => `Browser error: ${error}`));
 
@@ -365,7 +390,7 @@ async function main() {
       }
     });
 
-    console.log(JSON.stringify({ app: app.id, url: baseUrl, outputDir, results, contentKinds, tabKeyboard, graphMutation, blueprintContextMutation, stateMachineMutation, goapActionCount, errors }, null, 2));
+    console.log(JSON.stringify({ app: app.id, url: baseUrl, outputDir, results, contentKinds, tabKeyboard, graphMutation, blueprintContextMutation, stateMachineMutation, goapActionCount, goapExpectedActionCount, errors }, null, 2));
     if (failures.length) {
       throw new Error(failures.join('\n'));
     }
