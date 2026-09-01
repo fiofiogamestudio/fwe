@@ -7,6 +7,7 @@
   "exports": {
     ".": "./src/server.js",
     "./server": "./src/server.js",
+    "./domain-equivalence": "./src/domain-equivalence.js",
     "./dsl": "./src/dsl.js",
     "./extensions": "./src/extensions.js"
   },
@@ -15,7 +16,7 @@
   },
   "scripts": {
     "start": "node bin/fwe.js --app examples/app.fwe.json --open",
-    "syntax": "node --check public/runtime.js && node --check public/graph.js && node --check public/inspector.js && node --check public/app.js && node --check public/views/workbench.js && node --check src/server.js && node --check src/dsl.js && node --check src/extensions.js",
+    "syntax": "node --check public/runtime.js && node --check public/graph.js && node --check public/inspector.js && node --check public/app.js && node --check public/views/workbench.js && node --check src/server.js && node --check src/dsl.js && node --check src/extensions.js && node --check src/domain-equivalence.js",
     "check": "npm run syntax && node bin/fwe.js --check --app examples/app.fwe.json",
     "unit": "node --test test/*.test.js",
     "test": "npm run check && npm run unit",

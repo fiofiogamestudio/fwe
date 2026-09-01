@@ -1,0 +1,7 @@
+id notes
+title "Notes"
+source "folder-text:notes"
+
+view text {
+  language txt
+}

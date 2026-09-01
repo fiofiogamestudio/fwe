@@ -1,0 +1,30 @@
+{
+  "id": "notes",
+  "title": "Notes",
+  "format": "text",
+  "kind": "text",
+  "source": {
+    "type": "folder-text",
+    "path": "notes",
+    "extensions": [
+      ".txt"
+    ],
+    "identity": "id"
+  },
+  "model": {
+    "type": "text",
+    "language": "txt"
+  },
+  "modes": [],
+  "view": [
+    {
+      "type": "text",
+      "target": "",
+      "language": "txt"
+    }
+  ],
+  "defaults": {
+    "fileName": "notes.txt",
+    "text": ""
+  }
+}
