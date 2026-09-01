@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Restored JSON/DSL domain runtime-equivalence checks through the `--compare` CLI and reusable package API, sharing the browser's public domain projection so new runtime fields cannot be skipped silently.
 - Added optimistic revisions for built-in and custom sources, transactional built-in writes, stale-write diagnostics, and refresh/close guards for unsaved browser edits.
 - Isolated app launch fingerprints to each app's declared extension dependency graph while retaining shared-dependency change detection.
 - Unified framework tab semantics, roving keyboard focus, accessible status announcements, and configuration-driven shell, markup, and graph-action messages.

@@ -86,7 +86,10 @@ node bin/fwe.js --app examples/app.fwe.json
 node bin/fwe.js --replace --app examples/app.fwe.json
 node bin/fwe.js --check --app examples/app.fwe.json
 node bin/fwe.js --explain flow --app examples/app.fwe.json
+node bin/fwe.js --compare legacy.fwe.json migrated.fwe --app examples/app.fwe.json
 ```
+
+`--compare` compiles both JSON/DSL domain files and compares the exact domain contract exposed to the browser. Source-format metadata is ignored, while group, source, model, graph, refs, validation, actions, save, columns, inspector/forms, views/modes, defaults, and workbench configuration must remain equivalent.
 
 ## DSL
 
