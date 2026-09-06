@@ -395,7 +395,6 @@ test('multi-json writes prepare every file before replacing any target', (t) => 
   const workspace = path.join(root, 'workspace');
   fs.mkdirSync(workspace, { recursive: true });
   writeJson(path.join(workspace, 'first.json'), { value: 1 });
-  fs.writeFileSync(path.join(workspace, 'blocked'), 'not a directory', 'utf8');
   writeJson(path.join(root, 'domain.fwe.json'), {
     id: 'aggregate',
     kind: 'document',
@@ -420,6 +419,9 @@ test('multi-json writes prepare every file before replacing any target', (t) => 
   const app = loadAppConfig(path.join(root, 'app.fwe.json'));
   const domain = app.domains[0];
   const opened = readDomainFile(app, domain, 'aggregate.json');
+  // Capture a valid initial revision before injecting the prepare-time failure.
+  // Linux reports ENOTDIR during reads; Windows may report ENOENT instead.
+  fs.writeFileSync(path.join(workspace, 'blocked'), 'not a directory', 'utf8');
   assert.throws(() => writeDomainFile(app, domain, 'aggregate.json', {
     data: { first: { value: 2 }, second: { value: 2 } },
     revision: opened.revision
