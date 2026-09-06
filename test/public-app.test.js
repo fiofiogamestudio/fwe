@@ -18,7 +18,7 @@ test('domain actions.new=false disables both the visible command and createFile 
   assert.equal(domainAllowsNewFile({ actions: { new: false } }), false);
 
   assert.match(appSource, /setCommandVisible\(newButton, canCreateFile\)/);
-  assert.match(appSource, /async function createFile\(\) \{\s*if \(!domainAllowsNewFile\(state\.domain\)\)/);
+  assert.match(readFunctionSource('createFile'), /if \(!domainAllowsNewFile\(state\.domain\)\)/);
 });
 
 test('structured API diagnostics are normalized and deduplicated with local diagnostics', () => {
@@ -42,36 +42,16 @@ test('structured API diagnostics are normalized and deduplicated with local diag
   ]);
 });
 
-test('saveFile catches rejected writes and retains structured diagnostics', () => {
-  const saveSource = readFunctionSource('saveFile');
-  assert.match(saveSource, /catch \(error\)/);
-  assert.match(saveSource, /state\.dirty = true/);
-  assert.match(saveSource, /state\.serverDiagnostics = normalizeApiDiagnostics\(error\?\.issues\)/);
-  assert.match(saveSource, /setStatus\(formatAppLabel\('saveFailedWithIssues'/);
-  assert.match(appSource, /return mergeDiagnostics\(diagnostics, state\.serverDiagnostics\)/);
-  assert.match(appSource, /error\.issues = normalizeApiDiagnostics\(data\.issues\)/);
-});
-
-test('open and save retain source revision tokens for optimistic concurrency', () => {
-  const openSource = readFunctionSource('openSelectedFile');
-  const saveSource = readFunctionSource('saveFile');
-  assert.match(openSource, /result\.revision !== undefined/);
-  assert.match(saveSource, /payload\.revision = state\.file\.revision/);
-  assert.match(saveSource, /saved\?\.revision !== undefined/);
-});
-
-test('unsaved edits are guarded across navigation, refresh, and file-name collisions', () => {
+// Create/save ordering, revision tokens, and failures are executed in public-app-lifecycle.test.js.
+test('unsaved edits are guarded across navigation and unload', () => {
   const discardSource = readFunctionSource('confirmDiscardChanges');
   const dirtySource = readFunctionSource('hasUnsavedChanges');
-  const createSource = readFunctionSource('createFile');
 
   assert.match(discardSource, /hasUnsavedChanges\(\)/);
   assert.match(dirtySource, /state\.dirty \|\| state\.jsonDirty/);
   assert.match(appSource, /window\.addEventListener\('beforeunload'/);
   assert.match(appSource, /navigator\.userActivation\.hasBeenActive/);
   assert.match(appSource, /event\.returnValue = ''/);
-  assert.match(createSource, /fileAlreadyExists/);
-  assert.match(createSource, /existing\?\.exists !== false/);
 });
 
 test('framework tabs expose consistent semantics and keyboard navigation', () => {

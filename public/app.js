@@ -46,11 +46,16 @@ const state = {
   },
   serverDiagnostics: [],
   dirty: false,
+  resourceLoading: false,
+  resourceReady: false,
   selectionVersion: 0,
   fileOpenVersion: 0
 };
 let lastSelectionSignature = '';
 let managedNavigationQueue = Promise.resolve();
+// Saves are serialized per domain resource, not per currently visible editor.
+// A response from an earlier open must never adopt a later editor session.
+const resourceSaveQueues = new Map();
 
 const FWE_NAVIGATION_QUERY = Object.freeze({
   domainId: 'fweDomain',
@@ -400,15 +405,14 @@ fileSelect.addEventListener('change', async () => {
     fileSelect.value = previousFile?.name || '';
     return;
   }
-  if (nextFile.name === previousFile?.name && (state.data || state.text || state.domain?.kind === 'text')) {
+  if (!state.resourceLoading && state.resourceReady && nextFile.name === previousFile?.name) {
     return;
   }
   if (!confirmDiscardChanges()) {
     fileSelect.value = previousFile?.name || '';
     return;
   }
-  state.file = nextFile;
-  await openSelectedFile({ skipDirtyCheck: true });
+  await openSelectedFile({ skipDirtyCheck: true, file: nextFile });
 });
 
 openButton.addEventListener('click', () => {
@@ -661,7 +665,7 @@ window.addEventListener('keydown', (event) => {
   }
 });
 window.addEventListener('beforeunload', (event) => {
-  if (!hasUnsavedChanges()) return;
+  if (!hasUnsavedChanges() && resourceSaveQueues.size === 0) return;
   if (navigator.userActivation && !navigator.userActivation.hasBeenActive) return;
   event.preventDefault();
   event.returnValue = '';
@@ -1062,46 +1066,59 @@ function resetWorkbenchState(domain = state.domain) {
 async function selectDomain(domain, options = {}) {
   const selectionVersion = ++state.selectionVersion;
   state.fileOpenVersion += 1;
-  state.domain = domain;
-  state.files = [];
-  state.file = null;
-  state.data = null;
-  state.text = '';
-  state.selectedKey = '';
-  state.selectedEdge = null;
-  resetWorkbenchState(domain);
-  resetJsonDraftState();
-  state.view.resetPending = true;
-  state.dirty = false;
-  clearServerDiagnostics();
-  resetHistory();
-  const group = getDomainGroup(domain);
-  if (groupSelect.value !== group) {
-    groupSelect.value = group;
-    renderDomainSelect(group);
-  }
-  domainSelect.value = domain.id;
-  renderDomainSummary();
-  renderFileSelect();
-  setStatus('加载中');
-  const loaded = await loadFiles(domain, selectionVersion);
-  if (!loaded) {
-    return false;
-  }
-  const navigation = normalizeNavigationTarget(options.navigation);
-  if (navigation.fileName) {
-    const requestedFile = state.files.find((file) => file.name === navigation.fileName);
-    if (requestedFile) {
-      state.file = requestedFile;
-      fileSelect.value = requestedFile.name;
+  let ownedOpenVersion = state.fileOpenVersion;
+  setResourceLoading(true);
+  try {
+    state.domain = domain;
+    state.files = [];
+    state.file = null;
+    state.resourceReady = false;
+    state.data = null;
+    state.text = '';
+    state.selectedKey = '';
+    state.selectedEdge = null;
+    resetWorkbenchState(domain);
+    resetJsonDraftState();
+    state.view.resetPending = true;
+    state.dirty = false;
+    clearServerDiagnostics();
+    resetHistory();
+    const group = getDomainGroup(domain);
+    if (groupSelect.value !== group) {
+      groupSelect.value = group;
+      renderDomainSelect(group);
     }
+    domainSelect.value = domain.id;
+    renderDomainSummary();
+    renderFileSelect();
+    setStatus('加载中');
+    const loaded = await loadFiles(domain, selectionVersion);
+    if (!loaded) {
+      return false;
+    }
+    const navigation = normalizeNavigationTarget(options.navigation);
+    if (navigation.fileName) {
+      const requestedFile = state.files.find((file) => file.name === navigation.fileName);
+      if (requestedFile) {
+        state.file = requestedFile;
+        fileSelect.value = requestedFile.name;
+      }
+    }
+    if (state.file) {
+      ownedOpenVersion = state.fileOpenVersion + 1;
+      return await openSelectedFile({ skipDirtyCheck: true, navigation });
+    } else {
+      render();
+    }
+    return true;
+  } catch (error) {
+    if (selectionVersion === state.selectionVersion) {
+      setStatus(formatAppLabel('openFailed', '打开失败：{message}', { message: error.message }), true);
+    }
+    return false;
+  } finally {
+    if (selectionVersion === state.selectionVersion && ownedOpenVersion === state.fileOpenVersion) setResourceLoading(false);
   }
-  if (state.file) {
-    await openSelectedFile({ skipDirtyCheck: true, navigation });
-  } else {
-    render();
-  }
-  return true;
 }
 
 async function loadFiles(domain = state.domain, selectionVersion = state.selectionVersion) {
@@ -1111,7 +1128,7 @@ async function loadFiles(domain = state.domain, selectionVersion = state.selecti
   }
   state.files = result.files || [];
   renderFileSelect();
-  state.file = state.files[0] || null;
+  state.file = state.file || state.files[0] || null;
   if (state.file) {
     fileSelect.value = state.file.name;
   }
@@ -1166,7 +1183,7 @@ function handleTabListKeydown(event) {
 }
 
 async function openSelectedFile(options = {}) {
-  if (!state.file) {
+  if (!options.file && !state.file) {
     setStatus(getAppLabel('noFileSelected'), true);
     return;
   }
@@ -1175,51 +1192,74 @@ async function openSelectedFile(options = {}) {
   }
 
   const domain = state.domain;
-  const file = state.file;
+  const file = options.file || state.file;
   const selectionVersion = state.selectionVersion;
   const fileOpenVersion = ++state.fileOpenVersion;
-  const result = await api(`/api/domains/${encodeURIComponent(domain.id)}/files/${encodeURIComponent(file.name)}`);
-  if (
-    selectionVersion !== state.selectionVersion
-    || fileOpenVersion !== state.fileOpenVersion
-    || state.domain?.id !== domain.id
-  ) {
+  setResourceLoading(true);
+  try {
+    const pendingSave = resourceSaveQueues.get(resourceSaveKey(domain.id, file.name));
+    if (pendingSave) {
+      await pendingSave;
+      if (selectionVersion !== state.selectionVersion || fileOpenVersion !== state.fileOpenVersion || state.domain?.id !== domain.id) {
+        return false;
+      }
+    }
+    const result = await api(`/api/domains/${encodeURIComponent(domain.id)}/files/${encodeURIComponent(file.name)}`);
+    if (
+      selectionVersion !== state.selectionVersion
+      || fileOpenVersion !== state.fileOpenVersion
+      || state.domain?.id !== domain.id
+    ) {
+      return false;
+    }
+    const listedFile = state.files.find((file) => file.name === result.name)
+      || state.files.find((item) => item.name === file.name)
+      || {};
+    state.file = {
+      ...listedFile,
+      name: result.name,
+      path: result.path,
+      ...(result.alias ? { alias: String(result.alias) } : {}),
+      ...(result.revision !== undefined ? { revision: String(result.revision) } : {}),
+      ...(result.meta !== undefined ? { meta: clone(result.meta) } : {})
+    };
+    if (result.type === 'text') {
+      state.text = result.content || '';
+      state.data = null;
+    } else {
+      state.data = result.data;
+      state.text = '';
+    }
+    state.selectedKey = '';
+    state.selectedEdge = null;
+    resetWorkbenchState(state.domain);
+    applyWorkbenchNavigationTarget(normalizeNavigationTarget(options.navigation || readNavigationTarget()));
+    resetJsonDraftState();
+    state.view.resetPending = true;
+    state.dirty = false;
+    state.resourceReady = true;
+    fileSelect.value = state.file.name;
+    clearServerDiagnostics();
+    resetHistory();
+    setStatus(`${getAppLabel('opened')} ${getResourceDisplayName(state.file.name)}`);
+    render();
+    dispatchResourceEvent('fwe:resource-opened');
+    return true;
+  } catch (error) {
+    if (selectionVersion === state.selectionVersion && fileOpenVersion === state.fileOpenVersion) {
+      fileSelect.value = state.file?.name || '';
+      setStatus(formatAppLabel('openFailed', '打开失败：{message}', { message: error.message }), true);
+    }
     return false;
+  } finally {
+    if (selectionVersion === state.selectionVersion && fileOpenVersion === state.fileOpenVersion) {
+      setResourceLoading(false);
+    }
   }
-  const listedFile = state.files.find((file) => file.name === result.name)
-    || state.files.find((item) => item.name === file.name)
-    || {};
-  state.file = {
-    ...listedFile,
-    name: result.name,
-    path: result.path,
-    ...(result.alias ? { alias: String(result.alias) } : {}),
-    ...(result.revision !== undefined ? { revision: String(result.revision) } : {}),
-    ...(result.meta !== undefined ? { meta: clone(result.meta) } : {})
-  };
-  if (result.type === 'text') {
-    state.text = result.content || '';
-    state.data = null;
-  } else {
-    state.data = result.data;
-    state.text = '';
-  }
-  state.selectedKey = '';
-  state.selectedEdge = null;
-  resetWorkbenchState(state.domain);
-  applyWorkbenchNavigationTarget(normalizeNavigationTarget(options.navigation || readNavigationTarget()));
-  resetJsonDraftState();
-  state.view.resetPending = true;
-  state.dirty = false;
-  clearServerDiagnostics();
-  resetHistory();
-  setStatus(`${getAppLabel('opened')} ${getResourceDisplayName(state.file.name)}`);
-  render();
-  dispatchResourceEvent('fwe:resource-opened');
-  return true;
 }
 
 async function createFile() {
+  if (state.resourceLoading) return false;
   if (!domainAllowsNewFile(state.domain)) {
     setStatus(getAppLabel('newDisabled'), true);
     updateActionButtons();
@@ -1235,12 +1275,14 @@ async function createFile() {
     return false;
   }
   const existing = state.files.find((file) => String(file.name || '').toLowerCase() === name.toLowerCase());
-  if (existing?.exists !== false) {
+  if (existing && existing.exists !== false) {
     setStatus(formatAppLabel('fileAlreadyExists', '文件已存在：{name}', { name }), true);
     return false;
   }
 
-  state.file = { name };
+  state.fileOpenVersion += 1;
+  state.file = { name, exists: false };
+  state.resourceReady = true;
   state.data = clone(defaults.data || {});
   state.text = defaults.text || '';
   state.selectedKey = '';
@@ -1249,6 +1291,7 @@ async function createFile() {
   resetJsonDraftState();
   state.view.resetPending = true;
   state.dirty = true;
+  setResourceLoading(false);
   clearServerDiagnostics();
   resetHistory();
   if (!state.files.some((file) => file.name === name)) {
@@ -1263,6 +1306,7 @@ async function createFile() {
 }
 
 async function saveFile(options = {}) {
+  if (state.resourceLoading || !state.resourceReady) return false;
   if (!state.file) {
     setStatus(getAppLabel('noFileToSave'), true);
     return;
@@ -1287,56 +1331,114 @@ async function saveFile(options = {}) {
     payload = { data: state.data };
   }
 
-  if (state.file.revision !== undefined) {
-    payload.revision = state.file.revision;
-  }
-
+  // Freeze the requested contents now, including saves queued behind another PUT.
+  const contentSignature = JSON.stringify(payload);
+  payload = JSON.parse(contentSignature);
   const savingFile = { ...state.file };
-  let saved;
-  try {
-    saved = await api(`/api/domains/${encodeURIComponent(state.domain.id)}/files/${encodeURIComponent(state.file.name)}`, {
-      method: 'PUT',
-      body: JSON.stringify(payload)
-    });
-  } catch (error) {
-    state.dirty = true;
-    state.serverDiagnostics = normalizeApiDiagnostics(error?.issues);
-    render();
-    if (state.serverDiagnostics.length) {
-      setStatus(formatAppLabel('saveFailedWithIssues', '保存失败：{count} 个服务端校验错误', {
-        count: state.serverDiagnostics.length
-      }), true);
-    } else {
-      setStatus(formatAppLabel('saveFailed', '保存失败：{message}', {
-        message: error?.message || `HTTP ${error?.status || 500}`
-      }), true);
-    }
-    return false;
-  }
-  state.dirty = false;
-  clearServerDiagnostics();
-  setStatus(`${getAppLabel('saved')} ${getResourceDisplayName(savingFile.name)}`);
-  await loadFiles();
-  const listedFile = state.files.find((file) => file.name === savingFile.name);
-  state.file = {
-    ...(listedFile || savingFile),
-    ...(saved?.revision !== undefined ? { revision: String(saved.revision) } : {}),
-    ...(saved?.meta !== undefined
-      ? { meta: clone(saved.meta) }
-      : (savingFile.meta !== undefined ? { meta: clone(savingFile.meta) } : {}))
+  const identity = {
+    domainId: state.domain.id,
+    fileName: savingFile.name,
+    selectionVersion: state.selectionVersion,
+    fileOpenVersion: state.fileOpenVersion
   };
-  fileSelect.value = state.file.name;
-  render();
-  dispatchResourceEvent('fwe:resource-saved', { saved: saved ? clone(saved) : null });
-  return true;
+  const kind = state.domain.kind;
+  const key = resourceSaveKey(identity.domainId, identity.fileName);
+  const previous = resourceSaveQueues.get(key);
+  const operation = (async () => {
+    const preceding = previous ? await previous : null;
+    const revision = preceding?.revision ?? savingFile.revision;
+    if (revision !== undefined) payload.revision = revision;
+    if (savingFile.exists === false && !preceding?.created) payload.createOnly = true;
+    let saved;
+    try {
+      saved = await api(`/api/domains/${encodeURIComponent(identity.domainId)}/files/${encodeURIComponent(identity.fileName)}`, {
+        method: 'PUT', body: JSON.stringify(payload)
+      });
+    } catch (error) {
+      if (isCurrentResource(identity)) {
+        state.dirty = true;
+        state.serverDiagnostics = normalizeApiDiagnostics(error?.issues);
+        // Do not re-render the form: a focused, uncommitted field may be newer.
+        renderDiagnostics();
+        updateActionButtons();
+        if (state.serverDiagnostics.length) {
+          setStatus(formatAppLabel('saveFailedWithIssues', '保存失败：{count} 个服务端校验错误', {
+            count: state.serverDiagnostics.length
+          }), true);
+        } else {
+          setStatus(formatAppLabel('saveFailed', '保存失败：{message}', {
+            message: error?.message || `HTTP ${error?.status || 500}`
+          }), true);
+        }
+      }
+      return { ok: false, revision, created: preceding?.created || savingFile.exists !== false };
+    }
+    const result = { ok: true, revision: saved?.revision ?? revision, created: true };
+    if (!isCurrentResource(identity)) return result;
+
+    const currentContents = kind === 'text' ? { content: textView.value } : { data: state.data };
+    state.dirty = Boolean(state.jsonDirty || state.pendingInspectorControl?.isConnected
+      || JSON.stringify(currentContents) !== contentSignature);
+    clearServerDiagnostics();
+    state.file = {
+      ...savingFile, ...state.file, exists: true,
+      ...(saved?.path !== undefined ? { path: saved.path } : {}),
+      ...(result.revision !== undefined ? { revision: String(result.revision) } : {}),
+      ...(saved?.meta !== undefined ? { meta: clone(saved.meta) } : {})
+    };
+    const index = state.files.findIndex((file) => file.name === savingFile.name);
+    if (index >= 0) state.files[index] = { ...state.files[index], ...state.file };
+    else state.files.push({ ...state.file });
+    renderFileSelect();
+    fileSelect.value = state.file.name;
+    if (hasUnsavedChanges()) {
+      renderDiagnostics();
+      updateActionButtons();
+    } else {
+      // A clean acknowledgement can refresh derived views; never remount newer drafts.
+      render();
+      setStatus(`${getAppLabel('saved')} ${getResourceDisplayName(savingFile.name)}`);
+    }
+    dispatchResourceEvent('fwe:resource-saved', { saved: saved ? clone(saved) : null });
+    return result;
+  })();
+  resourceSaveQueues.set(key, operation);
+  try {
+    return (await operation).ok;
+  } finally {
+    if (resourceSaveQueues.get(key) === operation) resourceSaveQueues.delete(key);
+  }
+}
+
+function resourceSaveKey(domainId, fileName) {
+  return JSON.stringify([domainId, fileName]);
+}
+
+function isCurrentResource(identity) {
+  return state.domain?.id === identity.domainId && state.file?.name === identity.fileName
+    && state.selectionVersion === identity.selectionVersion && state.fileOpenVersion === identity.fileOpenVersion;
+}
+
+function setResourceLoading(loading) {
+  state.resourceLoading = loading;
+  // Resource selectors remain usable; the old editor is inert until its read completes.
+  const workspace = editorPanel.closest('main');
+  if (workspace) workspace.inert = loading || !state.resourceReady;
+  updateActionButtons();
 }
 
 async function refreshCurrentResource() {
   const currentName = state.file?.name || '';
-  await loadFiles();
+  const domain = state.domain;
+  const selectionVersion = state.selectionVersion;
+  const fileOpenVersion = state.fileOpenVersion;
+  const loaded = await loadFiles(domain, selectionVersion);
+  if (!loaded || selectionVersion !== state.selectionVersion || fileOpenVersion !== state.fileOpenVersion) return false;
   const next = state.files.find((file) => file.name === currentName) || state.files[0] || null;
-  state.file = next;
   if (!next) {
+    state.fileOpenVersion += 1;
+    state.file = null;
+    state.resourceReady = false;
     state.data = null;
     state.text = '';
     render();
@@ -1344,8 +1446,7 @@ async function refreshCurrentResource() {
     return false;
   }
   fileSelect.value = next.name;
-  await openSelectedFile({ skipDirtyCheck: true });
-  return true;
+  return openSelectedFile({ skipDirtyCheck: true, file: next });
 }
 
 function currentResourceSnapshot(extra = {}) {
@@ -1461,7 +1562,7 @@ async function navigateToResource(target = {}, options = {}) {
     return matched;
   }
 
-  if (navigation.fileName && navigation.fileName !== state.file?.name) {
+  if (navigation.fileName && (navigation.fileName !== state.file?.name || state.resourceLoading)) {
     const file = state.files.find((item) => item.name === navigation.fileName);
     if (!file) {
       setStatus(`Unknown navigation file: ${navigation.fileName}`, true);
@@ -1470,9 +1571,8 @@ async function navigateToResource(target = {}, options = {}) {
     if (!options.skipDirtyCheck && !confirmDiscardChanges()) {
       return false;
     }
-    state.file = file;
     fileSelect.value = file.name;
-    await openSelectedFile({ skipDirtyCheck: true, navigation });
+    await openSelectedFile({ skipDirtyCheck: true, navigation, file });
     const matched = navigationMatchesCurrentSelection(navigation);
     if (matched && options.updateUrl === true) {
       window.history.pushState(null, '', buildNavigationHref(currentNavigationTarget()));
@@ -1700,6 +1800,7 @@ function pushHistorySnapshot(snapshot) {
 }
 
 function undoAction() {
+  if (state.resourceLoading) return;
   if (!state.history.undo.length) {
     return;
   }
@@ -1710,6 +1811,7 @@ function undoAction() {
 }
 
 function redoAction() {
+  if (state.resourceLoading) return;
   if (!state.history.redo.length) {
     return;
   }
@@ -1745,7 +1847,7 @@ function hasUnsavedChanges() {
 }
 
 function updateActionButtons() {
-  const hasFile = !!state.file;
+  const hasFile = !!state.file && state.resourceReady && !state.resourceLoading;
   const canCreateFile = domainAllowsNewFile(state.domain);
   setCommandVisible(newButton, canCreateFile);
   setCommandVisible(undoButton, isActionVisible('undo'));
@@ -1755,13 +1857,13 @@ function updateActionButtons() {
   setCommandVisible(deleteButton, hasSurfaceActions() && isActionVisible('delete'));
   setCommandVisible(selectMetaButton, state.domain?.kind === 'graph');
   selectMetaButton.textContent = getGraphLabel('metaButton', getAppLabel('metaButton'));
-  undoButton.disabled = !state.history.undo.length;
-  redoButton.disabled = !state.history.redo.length;
-  newButton.disabled = !canCreateFile;
-  openButton.disabled = !hasFile;
+  undoButton.disabled = state.resourceLoading || !state.history.undo.length;
+  redoButton.disabled = state.resourceLoading || !state.history.redo.length;
+  newButton.disabled = state.resourceLoading || !canCreateFile;
+  openButton.disabled = !state.file || state.resourceLoading;
   addButton.disabled = !hasFile || state.domain?.kind === 'text' || isSidepanelPreviewActive();
-  duplicateButton.disabled = !canDuplicateSelection() || isSidepanelPreviewActive();
-  deleteButton.disabled = !canDeleteSelection() || isSidepanelPreviewActive();
+  duplicateButton.disabled = !hasFile || !canDuplicateSelection() || isSidepanelPreviewActive();
+  deleteButton.disabled = !hasFile || !canDeleteSelection() || isSidepanelPreviewActive();
   saveButton.disabled = !hasFile || !hasUnsavedChanges();
   updateSurfaceMoreVisibility();
   updateSurfaceHeader();

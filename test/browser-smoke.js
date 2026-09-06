@@ -568,7 +568,7 @@ function connectCdp(url) {
 
 async function evaluate(cdp, expression) {
   const result = await cdp.call('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
-  if (result.exceptionDetails) throw new Error(result.exceptionDetails.text || 'Browser evaluation failed.');
+  if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text || 'Browser evaluation failed.');
   return result.result?.value;
 }
 
@@ -1247,7 +1247,14 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-main().catch((error) => {
-  console.error(error.stack || error.message || String(error));
-  process.exitCode = 1;
-});
+module.exports = {
+  startFwe, startChrome, stopProcess, getFreePort, waitForHttp, waitForTarget,
+  connectCdp, evaluate, waitForExpression
+};
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error.stack || error.message || String(error));
+    process.exitCode = 1;
+  });
+}
