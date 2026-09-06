@@ -558,6 +558,29 @@ The page presentation keeps the normal FWE resource bar, history, validation, an
 
 ## Compatibility Aliases
 
+### Guarded programmatic server hosts
+
+`startServer(app, host, port, { requestGuard, quiet })` optionally awaits
+`requestGuard(req, res)` before **all** routing, including static assets,
+custom extension APIs, generic CRUD and `/api/app/stop`. The guard must return
+exactly `true` to continue. Returning anything else fails closed with 403
+unless the guard already finished the response; thrown errors use the normal
+server error response. `quiet: true` suppresses startup log lines for an
+embedding CLI's own ready message. Without a guard, existing FWE behavior is
+unchanged; FWE does not invent an authentication policy for every host.
+
+Hosts can require `SERVER_INTEGRATION_CONTRACT` (version 1) and its
+`requestGuard`, `extensions`, `launchRevision`, and `runtimeFingerprint`
+capabilities. `SERVER_RUNTIME_FINGERPRINT` captures FWE package/runtime source,
+templates and public asset bytes when the module loads;
+`getServerRuntimeFingerprint()` hashes the current bytes in the same format.
+An embedding host may compare them before routing to reject live checkout
+changes. These are compatibility/drift checks of trusted local code, not a
+signature or sandbox. FWA's optional console is one such independent host;
+FWE's core, generic server and extensions do not import FWA.
+
+### Existing boundary aliases
+
 The canonical API is `source / model / view / form`.
 
 For older local configs, fwe still accepts these aliases at the boundary:
