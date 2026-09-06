@@ -224,6 +224,11 @@ function fileRevision(fullPath) {
   return hashRevision(fs.readFileSync(fullPath));
 }
 
+function readFileSnapshot(fullPath) {
+  const bytes = fs.readFileSync(fullPath);
+  return { text: bytes.toString('utf8'), revision: hashRevision(bytes) };
+}
+
 function resourceRevision(resource) {
   const type = resource?.type === 'text' ? 'text' : 'json';
   const content = type === 'text'
@@ -254,6 +259,14 @@ function assertRevision(expected, actual, name) {
   }
 }
 
+function fileExistsConflict(name) {
+  const message = `Resource already exists: ${String(name || 'resource')}. Choose another name.`;
+  return Object.assign(new Error(message), {
+    status: 409,
+    issues: [{ path: '', message, level: 'error', code: 'file-exists' }]
+  });
+}
+
 function readJsonFile(fullPath) {
   return JSON.parse(stripBom(fs.readFileSync(fullPath, 'utf8')));
 }
@@ -262,19 +275,22 @@ function isExistingFile(filePath) {
   return Boolean(filePath) && fs.existsSync(filePath) && fs.statSync(filePath).isFile();
 }
 
-function writeJsonFile(fullPath, data) {
+function writeJsonFile(fullPath, data, options = {}) {
+  const content = `${JSON.stringify(data, null, 2)}\n`;
   writeFilesTransaction([{
     fullPath,
-    content: `${JSON.stringify(data, null, 2)}\n`
-  }]);
+    content
+  }], options);
+  return hashRevision(content);
 }
 
-function writeTextFile(fullPath, text) {
-  const normalized = String(text || '').replace(/\r\n?/g, '\n').replace(/\s*$/, '');
+function writeTextFile(fullPath, text, options = {}) {
+  const content = String(text ?? '');
   writeFilesTransaction([{
     fullPath,
-    content: `${normalized}\n`
-  }]);
+    content
+  }], options);
+  return hashRevision(content);
 }
 
 function ensureParent(fullPath) {
@@ -286,15 +302,17 @@ function sidecarPath(fullPath, kind) {
   return path.join(path.dirname(fullPath), `.${path.basename(fullPath)}.${token}.${kind}`);
 }
 
-function writeFilesTransaction(entries) {
+function writeFilesTransaction(entries, options = {}) {
   const prepared = [];
   let committed = false;
   try {
     for (const entry of entries) {
       const fullPath = path.normalize(entry.fullPath);
+      if (options.workspaceDir) resolveUnderWorkspace(options.workspaceDir, fullPath, 'write path');
       ensureParent(fullPath);
+      if (options.workspaceDir) resolveUnderWorkspace(options.workspaceDir, fullPath, 'write path');
       const tempPath = sidecarPath(fullPath, 'tmp');
-      fs.writeFileSync(tempPath, String(entry.content ?? ''), 'utf8');
+      fs.writeFileSync(tempPath, String(entry.content ?? ''), { encoding: 'utf8', flag: 'wx' });
       prepared.push({
         fullPath,
         tempPath,
@@ -305,6 +323,18 @@ function writeFilesTransaction(entries) {
     }
 
     for (const item of prepared) {
+      if (options.workspaceDir) resolveUnderWorkspace(options.workspaceDir, item.fullPath, 'write path');
+      if (options.createOnly === true) {
+        // Publish complete content without replacing a concurrently created target.
+        try {
+          fs.linkSync(item.tempPath, item.fullPath);
+        } catch (error) {
+          if (error.code === 'EEXIST') throw fileExistsConflict(path.basename(item.fullPath));
+          throw error;
+        }
+        item.replaced = true;
+        continue;
+      }
       if (fs.existsSync(item.fullPath)) {
         fs.renameSync(item.fullPath, item.backupPath);
         item.hadOriginal = true;
@@ -317,7 +347,12 @@ function writeFilesTransaction(entries) {
     for (const item of [...prepared].reverse()) {
       try {
         if (item.replaced && fs.existsSync(item.fullPath)) {
-          fs.rmSync(item.fullPath, { force: true });
+          // A create-only rollback must never remove somebody else's replacement.
+          const target = fs.lstatSync(item.fullPath);
+          const temporary = options.createOnly === true ? fs.lstatSync(item.tempPath) : null;
+          if (!temporary || (target.dev === temporary.dev && target.ino === temporary.ino)) {
+            fs.rmSync(item.fullPath, { force: true });
+          }
         }
         if (item.hadOriginal && fs.existsSync(item.backupPath)) {
           fs.renameSync(item.backupPath, item.fullPath);
@@ -494,9 +529,45 @@ function resolveUnderWorkspace(workspaceDir, rawPath, label) {
 
   const fullPath = path.normalize(path.isAbsolute(raw) ? raw : path.resolve(workspaceDir, raw));
   if (!isInside(workspaceDir, fullPath)) {
-    throw new Error(`${label} must stay inside workspace: ${raw}`);
+    throw workspacePathError(label, raw);
   }
+  assertManagedPath(workspaceDir, fullPath, label);
   return fullPath;
+}
+
+function workspacePathError(label, raw) {
+  const message = `${label} must stay inside workspace without descendant symbolic links or junctions: ${raw}`;
+  return Object.assign(new Error(message), {
+    status: 403,
+    issues: [{ path: '', message, level: 'error', code: 'workspace-path-escape' }]
+  });
+}
+
+function assertManagedPath(workspaceDir, fullPath, label) {
+  // The explicitly configured workspace itself may be a link. Descendant links
+  // are rejected so reads and atomic replacements have the same target meaning.
+  let realWorkspace;
+  try {
+    realWorkspace = fs.realpathSync(workspaceDir);
+  } catch (error) {
+    if (error.code === 'ENOENT') return; // A new workspace may not exist yet.
+    throw error;
+  }
+  let current = workspaceDir;
+  const relative = path.relative(workspaceDir, fullPath);
+  for (const part of relative.split(path.sep).filter(Boolean)) {
+    current = path.join(current, part);
+    let entry;
+    try {
+      entry = fs.lstatSync(current);
+    } catch (error) {
+      if (error.code === 'ENOENT') return; // Check all existing parents of new files.
+      throw error;
+    }
+    if (entry.isSymbolicLink() || !isInside(realWorkspace, fs.realpathSync(current))) {
+      throw workspacePathError(label, fullPath);
+    }
+  }
 }
 
 function safeRelativeName(raw) {
@@ -1492,6 +1563,47 @@ function sourceAction(provider, names) {
   return null;
 }
 
+const sourceMutationQueues = new WeakMap();
+
+async function withSourceMutation(app, domain, rawName, operation) {
+  let queues = sourceMutationQueues.get(app);
+  if (!queues) {
+    queues = new Map();
+    sourceMutationQueues.set(app, queues);
+  }
+  // Sessions may refer to the same host resource, so they must share the queue.
+  const key = JSON.stringify([domain.id, String(rawName || '')]);
+  const previous = queues.get(key) || Promise.resolve();
+  const pending = previous.catch(() => {}).then(operation);
+  queues.set(key, pending);
+  try {
+    return await pending;
+  } finally {
+    if (queues.get(key) === pending) queues.delete(key);
+  }
+}
+
+async function currentSourceResource(app, domain, provider, rawName, sessionId) {
+  try {
+    const current = await readSourceProviderFile(app, domain, provider, rawName, sessionId);
+    return current.exists === false ? null : current;
+  } catch (error) {
+    if (error.status === 404 || error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+async function assertSourceWritePrecondition(app, domain, provider, rawName, payload, sessionId) {
+  if (payload?.createOnly !== true && (payload?.revision === undefined || payload?.revision === null)) return;
+  const current = await currentSourceResource(app, domain, provider, rawName, sessionId);
+  if (payload?.createOnly === true) {
+    if (current) throw fileExistsConflict(rawName);
+  } else {
+    if (!current) throw revisionConflict(rawName, payload.revision, 'missing');
+    assertRevision(payload.revision, current.revision, rawName);
+  }
+}
+
 function sourceContext(app, domain, rawName = '', sessionId = 'default') {
   const source = domain.source || {};
   const sourceBase = source.path
@@ -1517,13 +1629,10 @@ function sourceContext(app, domain, rawName = '', sessionId = 'default') {
     resolveSourcePath(rawPath, label = 'source path') {
       const value = String(rawPath || '').trim();
       if (!value) {
-        return sourceBase;
+        return resolveUnderWorkspace(app.workspaceDir, sourceBase, label);
       }
       const fullPath = path.normalize(path.isAbsolute(value) ? value : path.resolve(sourceBase, value));
-      if (!isInside(app.workspaceDir, fullPath)) {
-        throw new Error(`${label} must stay inside workspace: ${value}`);
-      }
-      return fullPath;
+      return resolveUnderWorkspace(app.workspaceDir, fullPath, label);
     },
     safeName(raw = rawName) {
       return safeRelativeName(raw);
@@ -1535,13 +1644,13 @@ function sourceContext(app, domain, rawName = '', sessionId = 'default') {
       return readJsonFile(ctx.resolveSourcePath(rawPath));
     },
     writeJson(rawPath, data) {
-      writeJsonFile(ctx.resolveSourcePath(rawPath), data);
+      writeJsonFile(ctx.resolveSourcePath(rawPath), data, { workspaceDir: app.workspaceDir });
     },
     readText(rawPath) {
-      return stripBom(fs.readFileSync(ctx.resolveSourcePath(rawPath), 'utf8'));
+      return fs.readFileSync(ctx.resolveSourcePath(rawPath), 'utf8');
     },
     writeText(rawPath, text) {
-      writeTextFile(ctx.resolveSourcePath(rawPath), text);
+      writeTextFile(ctx.resolveSourcePath(rawPath), text, { workspaceDir: app.workspaceDir });
     },
     exists(rawPath) {
       return fs.existsSync(ctx.resolveSourcePath(rawPath));
@@ -1600,6 +1709,7 @@ function normalizeSourceReadResult(result, rawName) {
   if (normalized.revision === undefined) {
     normalized.revision = resourceRevision(normalized);
   }
+  if (source?.exists !== undefined) normalized.exists = source.exists !== false;
   return normalized;
 }
 
@@ -1622,14 +1732,15 @@ async function readSourceProviderFile(app, domain, provider, rawName, sessionId 
 }
 
 async function writeSourceProviderFile(app, domain, provider, rawName, payload, sessionId = 'default') {
+  return withSourceMutation(app, domain, rawName, () => writeSourceProviderFileLocked(app, domain, provider, rawName, payload, sessionId));
+}
+
+async function writeSourceProviderFileLocked(app, domain, provider, rawName, payload, sessionId) {
   const write = sourceAction(provider, ['write', 'save', 'saveFile']);
   if (!write) {
     throw Object.assign(new Error(`Source provider "${sourceProviderName(app, domain)}" does not implement write().`), { status: 501 });
   }
-  if (payload?.revision !== undefined) {
-    const current = await readSourceProviderFile(app, domain, provider, rawName, sessionId);
-    assertRevision(payload.revision, current.revision, rawName);
-  }
+  await assertSourceWritePrecondition(app, domain, provider, rawName, payload, sessionId);
   const result = await write(sourceContext(app, domain, rawName, sessionId), rawName, payload);
   let revision = result?.revision !== undefined ? String(result.revision) : '';
   if (!revision) {
@@ -1658,8 +1769,13 @@ async function createSourceProviderFile(app, domain, provider, payload, sessionI
   if (!create) {
     throw Object.assign(new Error(`Source provider "${sourceProviderName(app, domain)}" does not implement create().`), { status: 501 });
   }
-  const result = await create(sourceContext(app, domain, payload?.name || '', sessionId), payload || {});
-  return result || { ok: true };
+  const name = String(payload?.name || '');
+  return withSourceMutation(app, domain, name, async () => {
+    if (name) await assertSourceWritePrecondition(app, domain, provider, name, { createOnly: true }, sessionId);
+    // Providers that allocate names themselves own their uniqueness contract.
+    const result = await create(sourceContext(app, domain, name, sessionId), { ...payload, createOnly: true });
+    return result || { ok: true };
+  });
 }
 
 async function deleteSourceProviderFile(app, domain, provider, rawName, sessionId = 'default') {
@@ -1667,8 +1783,10 @@ async function deleteSourceProviderFile(app, domain, provider, rawName, sessionI
   if (!remove) {
     throw Object.assign(new Error(`Source provider "${sourceProviderName(app, domain)}" does not implement delete().`), { status: 501 });
   }
-  const result = await remove(sourceContext(app, domain, rawName, sessionId), rawName);
-  return result || { ok: true, name: rawName };
+  return withSourceMutation(app, domain, rawName, async () => {
+    const result = await remove(sourceContext(app, domain, rawName, sessionId), rawName);
+    return result || { ok: true, name: rawName };
+  });
 }
 
 function listFiles(app, domain, sessionId = 'default') {
@@ -1775,6 +1893,7 @@ function filePathForName(app, domain, rawName) {
   if (!isInside(sourcePath, fullPath)) {
     throw Object.assign(new Error('File path escapes source root.'), { status: 403 });
   }
+  resolveUnderWorkspace(app.workspaceDir, fullPath, 'file path');
 
   const ext = path.extname(fullPath).toLowerCase();
   if (isJsonSource(domain) && ext !== '.json') {
@@ -1795,14 +1914,14 @@ function readDomainFile(app, domain, rawName, sessionId = 'default') {
   }
 
   if (domain.source?.type === 'multi-json') {
-    const data = readMultiJsonDomain(app, domain);
+    const { data, revision } = readMultiJsonDomain(app, domain);
     return {
       name: domain.source.fileName || domain.defaults?.fileName || `${domain.id}.json`,
       path: '',
       type: 'json',
       data,
       content: JSON.stringify(data, null, 2),
-      revision: multiJsonRevision(app, domain)
+      revision
     };
   }
 
@@ -1814,16 +1933,16 @@ function readDomainFile(app, domain, rawName, sessionId = 'default') {
   const name = isFolderSource(domain)
     ? safeRelativeName(rawName)
     : path.basename(fullPath);
-  const text = stripBom(fs.readFileSync(fullPath, 'utf8'));
+  const { text, revision } = readFileSnapshot(fullPath);
   if (isJsonSource(domain)) {
-    const data = JSON.parse(text);
+    const data = JSON.parse(stripBom(text));
     return {
       name,
       path: toPosix(path.relative(app.workspaceDir, fullPath)),
       type: 'json',
       data,
       content: JSON.stringify(data, null, 2),
-      revision: fileRevision(fullPath)
+      revision
     };
   }
 
@@ -1832,7 +1951,7 @@ function readDomainFile(app, domain, rawName, sessionId = 'default') {
     path: toPosix(path.relative(app.workspaceDir, fullPath)),
     type: 'text',
     content: text,
-    revision: fileRevision(fullPath)
+    revision
   };
 }
 
@@ -1842,38 +1961,44 @@ function writeDomainFile(app, domain, rawName, payload, sessionId = 'default') {
     return writeSourceProviderFile(app, domain, provider, rawName, payload, sessionId);
   }
 
+  const writeOptions = { workspaceDir: app.workspaceDir, createOnly: payload?.createOnly === true };
+
   if (domain.source?.type === 'multi-json') {
     assertRevision(payload?.revision, multiJsonRevision(app, domain), rawName);
     const data = payload && Object.prototype.hasOwnProperty.call(payload, 'data')
       ? payload.data
       : JSON.parse(String(payload?.content || '{}'));
-    writeMultiJsonDomain(app, domain, data);
+    const revision = writeMultiJsonDomain(app, domain, data, writeOptions);
     return {
       ok: true,
       name: domain.source.fileName || domain.defaults?.fileName || `${domain.id}.json`,
       path: '',
-      revision: multiJsonRevision(app, domain)
+      revision
     };
   }
 
   const fullPath = filePathForName(app, domain, rawName);
   if (fs.existsSync(fullPath)) {
+    if (writeOptions.createOnly) throw fileExistsConflict(rawName);
     assertRevision(payload?.revision, fileRevision(fullPath), rawName);
+  } else if (!writeOptions.createOnly && payload?.revision !== undefined && payload?.revision !== null) {
+    throw revisionConflict(rawName, payload.revision, 'missing');
   }
+  let revision;
   if (isJsonSource(domain)) {
     const data = payload && Object.prototype.hasOwnProperty.call(payload, 'data')
       ? payload.data
       : JSON.parse(String(payload?.content || '{}'));
-    writeJsonFile(fullPath, data);
+    revision = writeJsonFile(fullPath, data, writeOptions);
   } else {
-    writeTextFile(fullPath, payload?.content || '');
+    revision = writeTextFile(fullPath, payload?.content ?? '', writeOptions);
   }
 
   return {
     ok: true,
     name: isFolderSource(domain) ? safeRelativeName(rawName) : path.basename(fullPath),
     path: toPosix(path.relative(app.workspaceDir, fullPath)),
-    revision: fileRevision(fullPath)
+    revision
   };
 }
 
@@ -1890,7 +2015,7 @@ async function createDomainFile(app, domain, payload, sessionId = 'default') {
   const dataPayload = domain.kind === 'text'
     ? { content: payload?.content ?? domain.defaults?.text ?? '' }
     : { data: payload?.data ?? clone(domain.defaults?.data || {}) };
-  return writeDomainFile(app, domain, name, dataPayload, sessionId);
+  return writeDomainFile(app, domain, name, { ...dataPayload, createOnly: true }, sessionId);
 }
 
 function deleteDomainFile(app, domain, rawName, sessionId = 'default') {
@@ -1932,23 +2057,28 @@ function normalizeMultiJsonFiles(domain) {
 
 function readMultiJsonDomain(app, domain) {
   const result = clone(domain.defaults?.data || {});
+  const parts = [];
   normalizeMultiJsonFiles(domain).forEach((entry) => {
     const fullPath = resolveUnderWorkspace(app.workspaceDir, entry.path, `domain "${domain.id}" source.files.${entry.key}`);
-    const value = fs.existsSync(fullPath) ? readJsonFile(fullPath) : clone(getByPathServer(result, entry.targetPath) ?? []);
+    const snapshot = fs.existsSync(fullPath) ? readFileSnapshot(fullPath) : null;
+    const value = snapshot ? JSON.parse(stripBom(snapshot.text)) : clone(getByPathServer(result, entry.targetPath) ?? []);
     setByPathServer(result, entry.targetPath, value);
+    parts.push(`${toPosix(entry.path)}\0${snapshot?.revision || 'missing'}`);
   });
-  return result;
+  return { data: result, revision: multiJsonRevisionFromParts(parts) };
 }
 
-function writeMultiJsonDomain(app, domain, data) {
+function writeMultiJsonDomain(app, domain, data, options = {}) {
   const entries = normalizeMultiJsonFiles(domain).map((entry) => {
     const fullPath = resolveUnderWorkspace(app.workspaceDir, entry.path, `domain "${domain.id}" source.files.${entry.key}`);
     return {
       fullPath,
+      sourcePath: entry.path,
       content: `${JSON.stringify(getByPathServer(data, entry.targetPath) ?? null, null, 2)}\n`
     };
   });
-  writeFilesTransaction(entries);
+  writeFilesTransaction(entries, options);
+  return multiJsonRevisionFromParts(entries.map(entry => `${toPosix(entry.sourcePath)}\0${hashRevision(entry.content)}`));
 }
 
 function multiJsonRevision(app, domain) {
@@ -1956,6 +2086,10 @@ function multiJsonRevision(app, domain) {
     const fullPath = resolveUnderWorkspace(app.workspaceDir, entry.path, `domain "${domain.id}" source.files.${entry.key}`);
     return `${toPosix(entry.path)}\0${fs.existsSync(fullPath) ? fileRevision(fullPath) : 'missing'}`;
   });
+  return multiJsonRevisionFromParts(parts);
+}
+
+function multiJsonRevisionFromParts(parts) {
   return hashRevision(`fwe-multi-json-v1\0${parts.join('\0')}`);
 }
 
