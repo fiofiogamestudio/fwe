@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Fixed new-file name detection and made initial draft saves create-only. Named creation rejects existing targets with HTTP 409; built-in exclusive publication also covers competing processes.
+- Bound save completion to resource/open identity and immutable request contents, preserved edits made during a pending response, serialized same-resource saves, and guarded loading/reopening against stale responses. Added executable shell behavior tests and real-browser edit/save/reopen/conflict regression coverage in CI.
+- Bound built-in read and write revisions to the actual content snapshot, serialized custom-source mutations within one app/resource, and rejected stale saves after deletion. Documented cross-process, aliasing and multi-file crash boundaries explicitly.
+- Rejected workspace-descendant symlinks/junctions in built-in sources and path-aware helpers. Migration: move linked resources into the configured workspace or use a deliberate trusted host adapter; this is not a plugin sandbox.
+- Text persistence now preserves supplied text, including BOM, CRLF, trailing whitespace and empty content, instead of silently normalizing it. Callers that need formatting must request or perform it explicitly.
 - Restored JSON/DSL domain runtime-equivalence checks through the `--compare` CLI and reusable package API, sharing the browser's public domain projection so new runtime fields cannot be skipped silently.
 - Added optimistic revisions for built-in and custom sources, transactional built-in writes, stale-write diagnostics, and refresh/close guards for unsaved browser edits.
 - Isolated app launch fingerprints to each app's declared extension dependency graph while retaining shared-dependency change detection.

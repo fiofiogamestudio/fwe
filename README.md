@@ -2,6 +2,10 @@
 
 `fwe` is a generic file-workspace editor runtime. It is designed to live as an independent repository or git submodule. Game-specific editors should depend on it through app config, domain files, and small extensions.
 
+### Component boundary
+
+FWE does not require FW, FWA, Godot, or a game runtime. A game built with FW does not need FWE either: interoperability belongs in optional app/source/model adapters, not in either framework's core. Generated metadata such as FW's `_config_schema.json` can be input to such an adapter; this repository does not claim to automatically import that format or arbitrary CSV layouts. Keep one authoritative schema, derive the editor model, and validate/save through the source contract below. Wide integers should remain decimal strings through JavaScript editors, rather than being coerced through `Number`.
+
 ## Quick Start
 
 Requirements: Node.js 18 or newer.
@@ -392,9 +396,21 @@ module.exports = (fwe) => {
 };
 ```
 
-Every successful read carries an opaque revision token. Built-in sources derive it from the physical content, and FWE derives one for custom sources that omit it. The browser returns that revision on save; a stale write receives HTTP `409` with a `revision-conflict` issue instead of overwriting an external change. Custom sources may return their own revision when host semantics need a different comparison boundary.
+Every successful read carries an opaque revision token. Built-in sources hash the bytes actually read, including each physical input of a multi-file resource; a save returns the revision of the content it published, not a later reread. FWE derives a token from custom-source content when a provider omits one. The browser returns that revision on save. If the resource has changed or disappeared, the save receives HTTP `409` with a `revision-conflict` issue. Calls that omit both `revision` and `createOnly` retain legacy unconditional-write behavior; new clients should always send one of these preconditions.
 
-Built-in JSON, text, and multi-file writes prepare temporary files before replacing targets and roll back already-replaced targets if a later replacement fails. A custom source remains responsible for its own aggregate host transaction because only the host knows which physical resources belong to one logical save.
+`POST /api/domains/:id/files` and `PUT /api/domains/:id/files/:name` with `createOnly: true` create a resource only when it does not already exist. A collision returns HTTP `409` with a `file-exists` issue. Built-in sources publish prepared files with a filesystem-exclusive hard link, so a competing process cannot win between an existence check and publication and then be overwritten. Unsupported filesystems fail the operation rather than falling back to an overwriting rename. A multi-json create requires every physical target to be absent; if any target exists, FWE preserves it and rolls back only files created by this attempt.
+
+Custom-source mutations are queued by domain ID and resource name within one loaded app instance, across browser sessions. Revision read/check, the awaited provider write, and its result revision stay in that queue; named `create` and `delete` operations use the same queue. A preconditioned custom write or named create requires `read()` to distinguish an existing resource from a missing one: report a missing resource with HTTP-style `status: 404`, `code: 'ENOENT'`, or a read result containing `exists: false`. Other errors fail closed. Providers receive `createOnly: true` and must enforce atomic creation themselves against other processes. Providers that allocate names, alias several names/domains to one resource, or span multiple physical resources remain responsible for uniqueness, shared-resource locking and aggregate transactions. They may return their own revision to describe a host transaction accurately.
+
+Built-in JSON, text, and multi-file writes prepare temporary files before replacing targets and attempt to roll back already-replaced targets if a later replacement fails. This is not a crash-recovery journal or a cross-process compare-and-swap transaction: a non-cooperating external writer can still race a normal revision check, and a crash can leave temporary/backup files or a partially published multi-file save. Keep independently writing tools coordinated. Text sources and `ctx.readText` / `ctx.writeText` preserve the supplied UTF-8 text, including BOM, CRLF, empty content and trailing whitespace; JSON sources continue to format JSON.
+
+Built-in sources and the path-aware `ctx` file helpers reject lexical traversal and symbolic links/junctions below the configured workspace with HTTP `403` and a `workspace-path-escape` issue. Existing ancestors are checked even when the target file or its parent directories do not exist yet. The explicitly configured workspace root may itself be a link. Descendant links are rejected even when they point back inside the workspace, keeping read and atomic-replacement semantics consistent. This is a local-workspace safety policy, not a sandbox against a process that can concurrently replace filesystem paths. Server extensions are trusted Node code and can deliberately bypass helpers through `ctx.fs`; they retain responsibility for any such access.
+
+### Browser resource lifecycle
+
+A save captures its resource identity, open generation and content snapshot. Saves for the same resource are queued and reuse the preceding successful revision. A response only updates the still-current opening of that resource; switching domains/files cannot transfer its revision or diagnostics to another editor. Later text, JSON draft or focused form edits remain dirty and are not remounted by a save response. Resource loading disables editing and saving until a successful read; reopening a resource waits for its pending saves before reading it again.
+
+New drafts carry `exists: false` and use `createOnly` on their first save, so a file created externally after the draft opened receives a visible conflict rather than being overwritten. Resource lifecycle events describe the current editor; a save that completes after leaving that resource returns its result to its caller without emitting an event labeled as the new selection.
 
 ### Reusable Browser Controls
 
@@ -461,7 +477,7 @@ npm run test:all
 npm run pack:dry
 ```
 
-`npm test` runs syntax, example compilation, and unit tests on Node.js 18 or newer. `test:browser` additionally requires Node.js 22 or newer and a local Chrome or Chromium installation; it checks every example domain for browser errors, layout overflow, and graph add/undo behavior. `test:all` runs both suites and verifies the published package contents.
+`npm test` runs syntax, example compilation, and unit tests on Node.js 18 or newer. `test:browser` additionally requires Node.js 22 or newer and a local Chrome or Chromium installation. It checks every example domain for browser errors, layout overflow and graph add/undo, then creates an isolated temporary host for real create/edit/save/reopen, conflict, in-flight editing and navigation tests against HTTP and disk. `test:browser:lifecycle` runs only this second suite. CI runs both browser suites on Node.js 22 and uploads their evidence; `test:all` runs the unit/browser suites and verifies the published package contents. Browser textareas may normalize line endings; server text persistence preserves the exact string it receives, not necessarily the original file's byte encoding after a browser edit.
 
 For a focused custom-form probe, `browser-smoke.js` accepts `--domain`, `--file`, `--collection`, `--item`, and `--expect-selector`. Pair `--mutation-button` with `--mutation-selector` to verify that a visible button increases the selected node count and Undo restores it.
 
