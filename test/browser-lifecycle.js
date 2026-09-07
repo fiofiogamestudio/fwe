@@ -23,8 +23,33 @@ async function main() {
   write('notes.fwe', 'id notes\ntitle "Notes"\nsource "folder-text:notes"\nview text { language txt }\n');
   write('other.fwe', 'id other\ntitle "Other"\nsource "folder-text:other"\nview text { language txt }\n');
   write('settings.fwe', 'id settings\ntitle "Settings"\nsource "folder-json:settings"\ndata Settings { name: string }\nview form { modes [form, json] }\n');
+  write('workspace/catalog.json', JSON.stringify({ records: ['a-existing', 'z-existing'].map(code => ({ code, name: `Existing ${code}`, owner: 'base', persisted: true })) }));
+  write('catalog.fwe.json', JSON.stringify({ id: 'catalog', kind: 'document', source: { type: 'sorted-catalog', path: '.' },
+    workbench: { inspector: false, collections: [{ id: 'records', path: 'records', idPath: 'code', title: 'name', search: ['name'],
+      defaultItem: { code: 'new-record', name: 'New record', owner: '', persisted: false, value: { faces: Array.from({ length: 6 }, (_, i) => ({ side: i + 1 })) } },
+      filters: [{ id: 'owner', itemPath: 'owner', options: [{ value: 'base', label: 'Base' }] }] }] }
+  }));
+  write('catalog.server.js', `module.exports = fwe => fwe.registerSource('sorted-catalog', {
+    list() { return [{ name: 'catalog.json', exists: true }]; },
+    read(ctx) { return { name: 'catalog.json', type: 'json', data: ctx.readJson('catalog.json') }; },
+    write(ctx, name, payload) {
+      payload.data.records.forEach(row => { row.persisted = true; });
+      payload.data.records.sort((a, b) => a.code.localeCompare(b.code));
+      ctx.writeJson(name, payload.data);
+      return { name };
+    }
+  });`);
+  write('catalog.client.js', `window.addEventListener('fwe:resource-saved', event => {
+    if (event.detail.domain.id !== 'catalog') return;
+    window.__catalogReload = { done: false };
+    setTimeout(async () => {
+      const ok = await window.fwe.resources.reloadCurrent();
+      window.__catalogReload = { done: true, ok };
+    }, 0);
+  });`);
   write('app.fwe.json', JSON.stringify({ id: 'lifecycle-test', title: 'Lifecycle test', workspace: './workspace',
-    domains: ['./notes.fwe', './other.fwe', './settings.fwe'] }));
+    extensions: [{ path: './catalog.server.js', client: './catalog.client.js' }],
+    domains: ['./notes.fwe', './other.fwe', './settings.fwe', './catalog.fwe.json'] }));
   const port = await getFreePort();
   const debugPort = await getFreePort();
   const url = `http://127.0.0.1:${port}`;
@@ -250,6 +275,63 @@ async function main() {
     await navigate('settings', 'settings.json');
     assert.equal(await evaluate(cdp, `document.querySelector('#inspectorForm input').value`), '18446744073709551615');
     cases.push('ordinary string fields preserve large decimal integer strings without FW-specific editor coupling');
+
+    await navigate('catalog', 'catalog.json');
+    await evaluate(cdp, `(() => {
+      const search = document.querySelector('#collectionSearch');
+      search.value = 'Existing'; search.dispatchEvent(new Event('input'));
+      document.querySelector('#addButton').click();
+      const draftId = window.fwe.navigation.current().itemId;
+      const input = [...document.querySelectorAll('#collectionEditorBody input')].find(input => input.value === draftId);
+      if (!input) throw new Error('New record identity field missing');
+      input.value = 'b-new-record'; input.dispatchEvent(new Event('change', { bubbles: true }));
+    })()`);
+    const draftSelection = await evaluate(cdp, 'window.fwe.resources.current().selection');
+    assert.equal(draftSelection.itemId, 'b-new-record');
+    assert.equal(draftSelection.key, 'records[2]');
+    const filtersBeforeSave = await evaluate(cdp, 'document.querySelector("#collectionFilter_owner").value');
+    const searchBeforeSave = await evaluate(cdp, 'document.querySelector("#collectionSearch").value');
+    await beginSave('catalog-create');
+    await finishSave('catalog-create');
+    await waitForExpression(cdp, 'window.__catalogReload?.done', 10000);
+    assert.equal(await evaluate(cdp, 'window.__catalogReload.ok'), true);
+    const savedCatalog = JSON.parse(read('catalog.json'));
+    assert.equal(savedCatalog.records[1].code, 'b-new-record');
+    assert.equal(savedCatalog.records[1].value.faces.length, 6);
+    current = await snapshot();
+    assert.equal(current.selection.itemId, 'b-new-record', 'automatic save reload must retain the new item without explicit navigation');
+    assert.equal(current.selection.key, 'records[1]', 'selection must follow identity when the host reorders its catalog');
+    assert.equal(current.data.records[1].persisted, true);
+    assert.equal(await evaluate(cdp, 'window.fwe.navigation.current().itemId'), 'b-new-record');
+    assert.equal(await evaluate(cdp, 'document.querySelector(".collection-item.is-active").dataset.itemId'), 'b-new-record');
+    assert.equal(await evaluate(cdp, '[...document.querySelectorAll("#collectionEditorBody input")].some(input => input.value === "New record" && !input.disabled)'), true);
+    assert.deepEqual(await evaluate(cdp, 'document.querySelector("#collectionFilter_owner").value'), filtersBeforeSave);
+    assert.equal(await evaluate(cdp, 'document.querySelector("#collectionSearch").value'), searchBeforeSave);
+    await screenshot('saved-catalog-selection-retained');
+    cases.push('new filtered record -> real save -> host sorting -> automatic reload retains stable identity, six faces, editable form and filters');
+
+    savedCatalog.records.unshift(savedCatalog.records.pop());
+    write('workspace/catalog.json', JSON.stringify(savedCatalog));
+    assert.equal(await evaluate(cdp, 'window.fwe.resources.refresh()'), true);
+    assert.equal((await snapshot()).selection.itemId, 'b-new-record');
+    assert.equal((await snapshot()).selection.key, 'records[2]');
+    assert.equal(await evaluate(cdp, 'document.querySelector(".collection-item.is-active").dataset.itemId'), 'b-new-record');
+    cases.push('explicit resource refresh retains the selected filtered record');
+
+    savedCatalog.records = savedCatalog.records.filter(row => row.code !== 'b-new-record');
+    write('workspace/catalog.json', JSON.stringify(savedCatalog));
+    assert.equal(await evaluate(cdp, 'window.fwe.resources.reloadCurrent()'), true);
+    assert.equal((await snapshot()).selection.itemId, 'z-existing');
+    assert.equal(await evaluate(cdp, 'document.querySelectorAll(".collection-item").length'), 2);
+    assert.deepEqual(await evaluate(cdp, 'document.querySelector("#collectionFilter_owner").value'), filtersBeforeSave);
+    cases.push('reload after deletion clears the old reveal path and selects an existing filtered row');
+
+    await evaluate(cdp, 'document.querySelector("#collectionFilter_owner").clear()');
+    assert.equal(await evaluate(cdp, 'window.fwe.resources.reloadCurrent()'), true);
+    assert.equal((await snapshot()).selection.key, '');
+    assert.equal(await evaluate(cdp, 'document.querySelectorAll(".collection-item").length'), 0);
+    assert.deepEqual(await evaluate(cdp, 'document.querySelector("#collectionFilter_owner").value'), []);
+    cases.push('reloading an empty filter preserves the empty selection without expanding defaults');
 
     assert.deepEqual(errors, []);
     const report = { ok: true, cases, browserErrors: errors, temporaryWorkspace: root, output };

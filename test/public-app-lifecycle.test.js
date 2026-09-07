@@ -57,6 +57,7 @@ function shell(options = {}) {
     resetHistory: () => {}, renderFileSelect: () => {}, updateActionButtons: () => {},
     setResourceLoading: (loading) => { state.resourceLoading = loading; },
     normalizeNavigationTarget: (value) => value || {}, readNavigationTarget: () => ({}),
+    currentNavigationTarget: () => ({}),
     applyWorkbenchNavigationTarget: () => {},
     api: (url, request) => {
       effects.requests.push({ url, ...request, payload: request?.body ? JSON.parse(request.body) : null });

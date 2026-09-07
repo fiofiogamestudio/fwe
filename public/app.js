@@ -14,6 +14,7 @@ const state = {
     listLayout: 'detail',
     search: '',
     filterValues: {},
+    revealedItemPath: '',
     mode: 'overview',
     variant: ''
   },
@@ -264,7 +265,7 @@ fweRuntime.session = fweSession;
 fweRuntime.resources = {
   current: () => currentResourceSnapshot(),
   saveCurrent: () => saveFile({ force: true }),
-  reloadCurrent: () => openSelectedFile({ skipDirtyCheck: true }),
+  reloadCurrent: () => openSelectedFile({ skipDirtyCheck: true, navigation: currentNavigationTarget(), preserveWorkbench: true }),
   refresh: () => refreshCurrentResource()
 };
 fweRuntime.navigation = {
@@ -1054,6 +1055,7 @@ function resetWorkbenchState(domain = state.domain) {
     listLayout: defaultState.list,
     search: '',
     filterValues: {},
+    revealedItemPath: '',
     mode: defaultState.mode,
     variant: ''
   };
@@ -1192,6 +1194,7 @@ async function openSelectedFile(options = {}) {
 
   const domain = state.domain;
   const file = options.file || state.file;
+  const workbench = options.preserveWorkbench && state.workbench ? clone(state.workbench) : null;
   const selectionVersion = state.selectionVersion;
   const fileOpenVersion = ++state.fileOpenVersion;
   setResourceLoading(true);
@@ -1232,7 +1235,9 @@ async function openSelectedFile(options = {}) {
     state.selectedKey = '';
     state.selectedEdge = null;
     resetWorkbenchState(state.domain);
-    applyWorkbenchNavigationTarget(normalizeNavigationTarget(options.navigation || readNavigationTarget()));
+    // Reloaded catalogs may reorder rows; retain filters but rebuild the reveal path by item identity.
+    if (workbench) state.workbench = { ...workbench, revealedItemPath: '' };
+    applyWorkbenchNavigationTarget(normalizeNavigationTarget(options.navigation || readNavigationTarget()), { preserveFilters: !!workbench });
     resetJsonDraftState();
     state.view.resetPending = true;
     state.dirty = false;
@@ -1445,7 +1450,8 @@ async function refreshCurrentResource() {
     return false;
   }
   fileSelect.value = next.name;
-  return openSelectedFile({ skipDirtyCheck: true, file: next });
+  return openSelectedFile({ skipDirtyCheck: true, file: next,
+    ...(next.name === currentName ? { navigation: currentNavigationTarget(), preserveWorkbench: true } : {}) });
 }
 
 function currentResourceSnapshot(extra = {}) {
@@ -1600,7 +1606,7 @@ async function navigateToResource(target = {}, options = {}) {
   return true;
 }
 
-function applyWorkbenchNavigationTarget(target = {}) {
+function applyWorkbenchNavigationTarget(target = {}, options = {}) {
   const navigation = normalizeNavigationTarget(target);
   if (!navigation.collectionId || !isCollectionWorkbench()) {
     return false;
@@ -1617,9 +1623,11 @@ function applyWorkbenchNavigationTarget(target = {}) {
     return false;
   }
   const rows = getCollectionRows(collection);
-  if (rows.length === 0 && !navigation.itemId) {
+  if (!navigation.itemId) {
+    state.workbench.revealedItemPath = '';
     state.workbench.collectionId = collection.id;
-    state.selectedKey = '';
+    const visible = getFilteredCollectionRows(collection);
+    state.selectedKey = visible.length ? getCollectionItemPath(collection, visible[0].index) : '';
     state.selectedEdge = null;
     const emptyModes = getCollectionModes(collection);
     state.workbench.mode = emptyModes.some((mode) => mode.id === navigation.mode)
@@ -1632,12 +1640,25 @@ function applyWorkbenchNavigationTarget(target = {}) {
     ? rows.findIndex((item, rowIndex) => String(getCollectionItemId(collection, item, rowIndex)) === navigation.itemId)
     : (rows.length > 0 ? 0 : -1);
   if (index < 0) {
+    if (options.preserveFilters) {
+      state.workbench.collectionId = collection.id;
+      state.workbench.revealedItemPath = '';
+      state.selectedKey = '';
+      reconcileCollectionSelection(collection);
+      return true;
+    }
     setStatus(`Unknown navigation item: ${navigation.collectionId}/${navigation.itemId}`, true);
     return false;
   }
   state.workbench.collectionId = collection.id;
   state.selectedKey = getCollectionItemPath(collection, index);
-  revealCollectionItemInFilters(collection, rows[index], index);
+  if (options.preserveFilters) {
+    if (!getFilteredCollectionRows(collection).some((row) => row.index === index)) {
+      state.workbench.revealedItemPath = state.selectedKey;
+    }
+  } else {
+    revealCollectionItemInFilters(collection, rows[index], index);
+  }
   const modes = getCollectionModes(collection);
   state.workbench.mode = modes.some((mode) => mode.id === navigation.mode)
     ? navigation.mode
@@ -1765,6 +1786,7 @@ function createHistorySnapshot(label = '') {
     data: state.data === null || state.data === undefined ? null : clone(state.data),
     text: state.text,
     selectedKey: state.selectedKey,
+    revealedItemPath: state.workbench?.revealedItemPath || '',
     inspectorMode: state.inspectorMode
   };
 }
@@ -1825,6 +1847,7 @@ function restoreHistorySnapshot(snapshot, label) {
   state.data = snapshot.data === null || snapshot.data === undefined ? null : clone(snapshot.data);
   state.text = snapshot.text || '';
   state.selectedKey = snapshot.selectedKey || '';
+  if (state.workbench) state.workbench.revealedItemPath = snapshot.revealedItemPath || '';
   state.selectedEdge = null;
   state.inspectorMode = snapshot.inspectorMode || 'form';
   resetJsonDraftState();
@@ -1980,7 +2003,14 @@ function addSelectionItem() {
   setByPath(state.data, targetPath, rows);
   state.selectedKey = `${targetPath}[${rows.length - 1}]`;
   state.selectedEdge = null;
+  if (isCollectionWorkbench()) {
+    state.workbench.revealedItemPath = state.selectedKey;
+    state.workbench.listLayout = 'detail';
+    state.workbench.mode = getCollectionDefaultMode(getActiveWorkbenchCollection());
+    state.workbench.variant = '';
+  }
   markDirtyAndRender(formatAppLabel('statusAddedPath', '已添加 {path}', { path: targetPath }));
+  if (isCollectionWorkbench()) collectionList.querySelector('.collection-item.is-active')?.scrollIntoView({ block: 'nearest' });
 }
 
 function duplicateSelection() {
@@ -2011,6 +2041,9 @@ function duplicateSelection() {
     state.selectedKey = info.parentPath ? `${info.parentPath}.${nextKey}` : nextKey;
   }
   state.selectedEdge = null;
+  if (isCollectionWorkbench() && info.parentIsArray) {
+    state.workbench.revealedItemPath = state.selectedKey;
+  }
   markDirtyAndRender(formatAppLabel('statusDuplicatedPath', '已复制 {path}', { path: info.path }));
 }
 
@@ -3331,15 +3364,20 @@ function getCollectionSearchText(collection, item, index) {
 
 function getFilteredCollectionRows(collection) {
   const query = state.workbench.search;
-  let rows = getCollectionRows(collection).map((item, index) => ({ item, index }));
+  const allRows = getCollectionRows(collection).map((item, index) => ({ item, index }));
+  let rows = allRows;
   getAppliedCollectionFilters(collection).forEach(({ filter, options, selected }) => {
     rows = rows.filter(({ item, index }) => (
       fweRuntime.collectionFilters.matches(filter, options, selected, item, index)
     ));
   });
-  return query
+  rows = query
     ? rows.filter(({ item, index }) => getCollectionSearchText(collection, item, index).includes(query))
     : rows;
+  // An explicitly revealed item can be outside relational options until the host indexes it.
+  const revealed = allRows.find(({ index }) => getCollectionItemPath(collection, index) === state.workbench.revealedItemPath);
+  if (revealed && !rows.some(({ index }) => index === revealed.index)) rows = [...rows, revealed];
+  return rows;
 }
 
 function getAppliedCollectionFilters(collection) {
@@ -3369,6 +3407,7 @@ function getCollectionFilterValueState(collection) {
 }
 
 function revealCollectionItemInFilters(collection, item, index) {
+  state.workbench.revealedItemPath = '';
   const collectionValues = getCollectionFilterValueState(collection);
   getAppliedCollectionFilters(collection).forEach(({ filter, options, selected }) => {
     if (fweRuntime.collectionFilters.matches(filter, options, selected, item, index)) {
@@ -3379,6 +3418,9 @@ function revealCollectionItemInFilters(collection, item, index) {
       collectionValues[filter.id] = [...new Set([...selected, ...matching])];
     }
   });
+  if (!getFilteredCollectionRows(collection).some((row) => row.index === index)) {
+    state.workbench.revealedItemPath = getCollectionItemPath(collection, index);
+  }
 }
 
 function reconcileCollectionSelection(collection, rows = getFilteredCollectionRows(collection)) {
@@ -3441,6 +3483,7 @@ function renderCollectionWorkbench() {
 
 function refreshCollectionFilterResults(collection) {
   if (!collection) return;
+  state.workbench.revealedItemPath = '';
   const rows = getFilteredCollectionRows(collection);
   reconcileCollectionSelection(collection, rows);
   renderCollectionList(collection, rows);
@@ -3506,8 +3549,9 @@ function activateWorkbenchCollection(collection) {
   state.workbench.collectionId = collection.id;
   state.workbench.mode = getCollectionDefaultMode(collection);
   state.workbench.variant = '';
-  const rows = getCollectionRows(collection);
-  state.selectedKey = rows.length ? getCollectionItemPath(collection, 0) : '';
+  state.workbench.revealedItemPath = '';
+  const rows = getFilteredCollectionRows(collection);
+  state.selectedKey = rows.length ? getCollectionItemPath(collection, rows[0].index) : '';
   resetJsonDraftState();
   render();
 }
