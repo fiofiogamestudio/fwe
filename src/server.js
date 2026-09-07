@@ -18,6 +18,30 @@ const BODY_LIMIT = 8 * 1024 * 1024;
 const LAUNCH_REVISION_VERSION = 'fwe-launch-v1';
 const LAUNCH_REVISION_EXTENSIONS = new Set(['.cjs', '.css', '.fwe', '.html', '.js', '.json', '.mjs']);
 const LAUNCH_REVISION_IGNORED_DIRECTORIES = new Set(['.git', 'node_modules']);
+// Programmatic hosts can require this explicit contract before trusting a guard.
+const SERVER_INTEGRATION_CONTRACT = Object.freeze({
+  version: 1,
+  requestGuard: 'await-before-routing-v1',
+  extensions: 'sync-setup-async-handlers-v1',
+  launchRevision: LAUNCH_REVISION_VERSION,
+  runtimeFingerprint: 'fwe-runtime-v1'
+});
+
+function getServerRuntimeFingerprint() {
+  const files = [path.join(FWE_ROOT, 'package.json')];
+  function visit(directory) {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const fullPath = path.join(directory, entry.name);
+      if (entry.isSymbolicLink()) throw new Error(`Runtime fingerprint cannot follow linked sources: ${fullPath}`);
+      if (entry.isDirectory()) visit(fullPath);
+      else if (entry.isFile()) files.push(fullPath);
+    }
+  }
+  for (const directory of ['bin', 'src', 'public', 'templates']) visit(path.join(FWE_ROOT, directory));
+  const hash = crypto.createHash('sha256').update('fwe-runtime-v1\0');
+  for (const file of files.sort()) hash.update(path.relative(FWE_ROOT, file).replace(/\\/g, '/')).update('\0').update(fs.readFileSync(file)).update('\0');
+  return `fwe-runtime-v1:${hash.digest('hex')}`;
+}
 
 function parseArgs(argv, env = process.env) {
   const noBrowser = env.FWE_NO_BROWSER === '1';
@@ -2280,9 +2304,18 @@ async function handleApi(app, req, res, url, control = {}) {
 }
 
 function startServer(app, host, port, options = {}) {
+  if (options.requestGuard !== undefined && typeof options.requestGuard !== 'function') {
+    throw new TypeError('requestGuard must be a function.');
+  }
   const server = http.createServer(async (req, res) => {
-    const url = new URL(req.url, `http://${req.headers.host || `${host}:${port}`}`);
     try {
+      // A rejection or thrown error fails closed, including static, CRUD and stop routes.
+      // Guards return true to continue; they may instead finish their own response.
+      if (options.requestGuard && await options.requestGuard(req, res) !== true) {
+        if (!res.writableEnded) sendJson(res, 403, { error: 'Request rejected by host guard.' });
+        return;
+      }
+      const url = new URL(req.url, `http://${req.headers.host || `${host}:${port}`}`);
       if (url.pathname.startsWith('/api/')) {
         await handleApi(app, req, res, url, {
           stop() {
@@ -2307,10 +2340,12 @@ function startServer(app, host, port, options = {}) {
       const address = server.address();
       const actualPort = address && typeof address === 'object' ? address.port : port;
       const browserUrl = urlForBrowser(host, actualPort);
-      console.log(`[fwe] ${app.title} running at ${browserUrl}`);
-      console.log(`[fwe] app: ${app.appPath}`);
-      console.log(`[fwe] workspace: ${app.workspaceDir}`);
-      console.log(`[fwe] domains: ${app.domains.map((domain) => `${domain.id}:${domain.kind}`).join(', ')}`);
+      if (!options.quiet) {
+        console.log(`[fwe] ${app.title} running at ${browserUrl}`);
+        console.log(`[fwe] app: ${app.appPath}`);
+        console.log(`[fwe] workspace: ${app.workspaceDir}`);
+        console.log(`[fwe] domains: ${app.domains.map((domain) => `${domain.id}:${domain.kind}`).join(', ')}`);
+      }
       if (options.open) {
         console.log(`[fwe] Opening browser: ${browserUrl}`);
         openBrowser(browserUrl);
@@ -2433,7 +2468,14 @@ async function main(argv) {
   }
 }
 
+// Capture at module load, not first launch: a cached server module must not claim
+// newly edited on-disk source bytes as the implementation it already loaded.
+const SERVER_RUNTIME_FINGERPRINT = getServerRuntimeFingerprint();
+
 module.exports = {
+  SERVER_INTEGRATION_CONTRACT,
+  SERVER_RUNTIME_FINGERPRINT,
+  getServerRuntimeFingerprint,
   main,
   parseArgs,
   loadAppConfig,
