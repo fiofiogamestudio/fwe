@@ -3914,7 +3914,9 @@ function endGraphDrag() {
 }
 
 function clampViewScale(scale) {
-  return Math.min(MAX_VIEW_SCALE, Math.max(MIN_VIEW_SCALE, scale));
+  // Fit and wheel zoom share a lower bound, including graphs larger than the viewport at 10%.
+  const minScale = Math.min(MIN_VIEW_SCALE, getGraphFitScale());
+  return Math.min(MAX_VIEW_SCALE, Math.max(minScale, scale));
 }
 
 function getViewportMetrics() {
@@ -3956,15 +3958,20 @@ function resetGraphView(render = true) {
   }
 }
 
-function fitGraphViewToContent() {
-  const viewport = getViewportMetrics();
+function getGraphFitScale(viewport = getViewportMetrics()) {
   const contentWidth = Math.max(1, state.view.contentWidth || 1);
   const contentHeight = Math.max(1, state.view.contentHeight || 1);
   const availableWidth = Math.max(1, viewport.width - FIT_VIEW_PADDING * 2);
   const availableHeight = Math.max(1, viewport.height - FIT_VIEW_PADDING * 2 - FIT_VIEW_HUD_RESERVE);
-  const fitScale = Math.min(MAX_VIEW_SCALE, availableWidth / contentWidth, availableHeight / contentHeight);
-  const resetMinScale = Number(state.domain?.graph?.view?.resetMinScale ?? RESET_READABLE_MIN_SCALE);
-  const scale = clampViewScale(Math.max(fitScale, Math.min(MAX_VIEW_SCALE, resetMinScale)));
+  return Math.min(MAX_VIEW_SCALE, availableWidth / contentWidth, availableHeight / contentHeight);
+}
+
+function fitGraphViewToContent() {
+  const viewport = getViewportMetrics();
+  const contentWidth = Math.max(1, state.view.contentWidth || 1);
+  const fitScale = getGraphFitScale(viewport);
+  const resetMinScale = Number(state.domain?.graph?.view?.resetMinScale);
+  const scale = clampViewScale(Math.max(fitScale, Number.isFinite(resetMinScale) ? resetMinScale : fitScale));
   state.view.scale = scale;
   const anchor = scale > fitScale + 0.001 ? getGraphResetAnchor() : null;
   state.view.tx = anchor

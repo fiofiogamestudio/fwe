@@ -197,6 +197,14 @@ For built-in JSON sources, a root-level optional string `alias` is displayed aft
 
 JSON graph domains may use `nodeViews` to give each node collection its own badge, title, body, and labeled detail rows. A grid graph may also declare `derivedEdges.type: "orthogonal-grid"`; FWE then connects Manhattan-adjacent positions unless an explicit configured link list is present. These options change presentation and edge discovery only; node data remains owned by the host domain.
 
+### Graph Reset and Zoom
+
+By default, Reset fits the entire graph into the current graph viewport, reserving space for padding and the zoom controls, up to 100% scale. It does not hide the inspector or change saved node positions.
+
+An explicit `graph.view.resetMinScale` remains supported for compatibility. Values such as `0.35` or `0.62` impose a minimum Reset scale (capped at 100%), prioritizing readable node details over seeing the whole graph. When this exceeds the fit scale, nodes may be clipped; fixed graphs retain their initial-node anchor, while free and blueprint graphs remain horizontally centered. Remove the field from a host domain to opt into full-fit Reset on narrow or short viewports. There is no longer an implicit 35% Reset floor.
+
+Manual wheel zoom remains available from `min(10%, fitScale)` through 100%, independently of an explicit Reset floor. Default Reset and wheel zoom share this lower bound so a fit below 10% does not jump back to 10% on the first wheel step. Zoom in to inspect node details; without an explicit Reset floor, Reset returns to the full graph.
+
 ## Workbench
 
 Use `workbench` when one domain needs multiple collections, shared search, item forms, previews, references, or a custom workspace-like composition.

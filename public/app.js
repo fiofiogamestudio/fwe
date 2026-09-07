@@ -221,7 +221,6 @@ const MIN_VIEW_SCALE = 0.1;
 const MAX_VIEW_SCALE = 1;
 const FIT_VIEW_PADDING = 28;
 const FIT_VIEW_HUD_RESERVE = 58;
-const RESET_READABLE_MIN_SCALE = 0.35;
 const PAN_DRAG_THRESHOLD = 4;
 const START_NODE_KEY = '__start__';
 const END_NODE_PREFIX = '__end__:';
