@@ -682,6 +682,7 @@ async function init() {
   validateAllDomainViews();
   validateAllDomainForms();
   appTitle.textContent = state.app.title;
+  appTitle.title = state.app.title;
   applyAppLabels();
   renderGroupSelect();
   const firstDomain = state.app.domains[0];
@@ -1949,9 +1950,7 @@ function getSurfaceSelectionText() {
   }
   const managedSection = findManagedSection()?.section;
   if (managedSection?.collectionId && isCollectionWorkbench()) {
-    const collection = getActiveWorkbenchCollection();
-    const selected = collection ? findSelectedCollectionItem(collection) : null;
-    return selected ? getCollectionItemTitle(collection, selected.item, selected.index) : '';
+    return '';
   }
   if (state.selectedKey) {
     return formatSurfaceSelectionKey(state.selectedKey);
@@ -3618,6 +3617,7 @@ function renderCollectionList(collection, rows = getFilteredCollectionRows(colle
       <span class="collection-item__title">${escapeHtml(getCollectionItemTitle(collection, item, index))}</span>
       <span class="collection-item__meta">${escapeHtml(getCollectionItemSubtitle(collection, item) || String(getCollectionItemId(collection, item, index)))}</span>
     `;
+    button.querySelectorAll('span').forEach((span) => { span.title = span.textContent; });
     button.addEventListener('click', () => selectCollectionItem(collection, index));
     collectionList.append(button);
   });
@@ -3821,7 +3821,11 @@ function renderCollectionGrid(collection) {
     title.textContent = getCollectionItemTitle(collection, item, index);
     title.title = title.textContent;
     card.append(title);
-    columns.slice(0, 6).forEach((column) => {
+    const titlePath = collection.title || collection.labelPath || 'name';
+    const identityPath = getCollectionIdKey(collection);
+    const detailColumns = columns.filter((column) => (column.path !== titlePath && column.path !== identityPath)
+      || formatCollectionColumnValue(column, item) !== title.textContent);
+    detailColumns.slice(0, 6).forEach((column) => {
       const row = document.createElement('span');
       row.className = 'collection-grid-card__row';
       const label = document.createElement('span');

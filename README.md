@@ -442,6 +442,8 @@ host.append(filter);
 
 Use `configure(...)` for non-emitting model updates, `value` or `setValue(...)` for selection, `selectAll()` / `clear()` for commands, and `open` / `close()` for popup state. Set `--fwe-multi-select-width`, `--fwe-multi-select-menu-width`, and `--fwe-multi-select-menu-max-height` on the returned element when a host layout needs different dimensions. Keep option discovery and filtering semantics in the host extension.
 
+Native selects and the shadow-root multi-select share `--control-height` (36px), `--control-font`, `--control-padding`, `--control-radius`, `--control-border`, `--control-bg`, and the hover, focus and disabled color tokens in `public/styles.css`. Host shadow-root styles can consume these inherited tokens; native selects also use `--control-select-padding` and `--control-select-arrow`. Existing `--fwe-control-height` and `--fwe-control-padding` overrides remain supported for multi-selects. Popover-capable browsers place menus in the top layer, constrained to the viewport and the owning panel's width; menus reposition on resize/scroll and close on removal.
+
 Workbench references should use FWE resource links instead of assembling app URLs in host code. The helper preserves the current domain, file, and browser session, writes a stable collection/item deep link, and opens a new tab by default:
 
 ```js
@@ -486,6 +488,8 @@ npm run pack:dry
 ```
 
 `npm test` runs syntax, example compilation, and unit tests on Node.js 18 or newer. `test:browser` additionally requires Node.js 22 or newer and a local Chrome or Chromium installation. It checks every example domain for browser errors, layout overflow and graph add/undo, then creates an isolated temporary host for real create/edit/save/reopen, conflict, in-flight editing and navigation tests against HTTP and disk. `test:browser:lifecycle` runs only this second suite. CI runs both browser suites on Node.js 22 and uploads their evidence; `test:all` runs the unit/browser suites and verifies the published package contents. Browser textareas may normalize line endings; server text persistence preserves the exact string it receives, not necessarily the original file's byte encoding after a browser edit.
+
+`test:browser:ui` (also included in `test:browser`) uses temporary data to check long collection lists, native/shadow dropdown parity, popup visibility and lifecycle, grid title deduplication and graph Reset visibility at 1440px, 760px and 354px. Measurements, failures and screenshots are saved under the reported temporary directory.
 
 For a focused custom-form probe, `browser-smoke.js` accepts `--domain`, `--file`, `--collection`, `--item`, and `--expect-selector`. Pair `--mutation-button` with `--mutation-selector` to verify that a visible button increases the selected node count and Undo restores it.
 

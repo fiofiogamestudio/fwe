@@ -95,8 +95,11 @@
           formatSummary: null
         };
         this._connected = false;
+        this._menuOpen = false;
         this._onDocumentPointerDown = this._onDocumentPointerDown.bind(this);
         this._onOtherControlOpened = this._onOtherControlOpened.bind(this);
+        this._positionMenu = this._positionMenu.bind(this);
+        this._onScroll = this._onScroll.bind(this);
 
         const root = this.attachShadow({ mode: 'open' });
         root.innerHTML = `
@@ -108,53 +111,60 @@
               inline-size: var(--fwe-multi-select-width, 150px);
               min-inline-size: 0;
               color: var(--text, #213043);
-              font: inherit;
+              font: var(--control-font, 14px/1.4 "Microsoft YaHei", "PingFang SC", sans-serif);
             }
             :host([hidden]) { display: none; }
             * { box-sizing: border-box; }
             details { position: relative; inline-size: 100%; }
             summary {
-              min-block-size: var(--fwe-control-height, var(--control-height, 34px));
+              block-size: var(--fwe-control-height, var(--control-height, 36px));
+              min-block-size: var(--fwe-control-height, var(--control-height, 36px));
               display: flex;
               align-items: center;
               justify-content: space-between;
               gap: 8px;
-              padding: var(--fwe-control-padding, 7px 10px);
+              padding: var(--fwe-control-padding, var(--control-padding, 7px 10px));
               border: 1px solid var(--control-border, var(--line-strong, #4a5a70));
-              background: var(--panel, #fff);
+              border-radius: var(--control-radius, 0);
+              background: var(--control-bg, #fff);
               color: var(--text, #213043);
               cursor: pointer;
               list-style: none;
               white-space: nowrap;
             }
+            .summary-label { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; }
             summary::-webkit-details-marker { display: none; }
             summary::after {
               content: '';
-              inline-size: 0;
-              block-size: 0;
-              border-inline: 4px solid transparent;
-              border-block-start: 6px solid var(--muted, #66758b);
+              inline-size: 12px;
+              block-size: 8px;
+              background: var(--control-select-arrow, url('/icons/chevron-down.svg')) center / contain no-repeat;
               flex: 0 0 auto;
             }
+            :host(:not([disabled])) summary:hover { border-color: var(--control-border-hover, var(--accent, #516e9e)); }
+            summary:focus-visible,
             details[open] > summary {
-              border-color: var(--accent, #516e9e);
-              outline: 2px solid color-mix(in srgb, var(--accent, #516e9e) 24%, transparent);
+              border-color: var(--control-border-focus, var(--accent, #516e9e));
+              outline: 2px solid var(--control-focus-ring, color-mix(in srgb, var(--accent, #516e9e) 24%, transparent));
             }
             :host([disabled]) summary {
               cursor: default;
-              opacity: 0.5;
+              background: var(--control-disabled-bg, #edf1f6);
+              color: var(--control-disabled-text, var(--muted, #66758b));
             }
             .menu {
-              position: absolute;
+              position: fixed;
               z-index: 100;
-              inset-block-start: calc(100% + 4px);
-              inset-inline-end: 0;
+              inset: auto;
+              margin: 0;
               inline-size: var(--fwe-multi-select-menu-width, 250px);
+              max-inline-size: var(--menu-available-width, calc(100vw - 16px));
               max-block-size: var(--fwe-multi-select-menu-max-height, 360px);
               overflow: auto;
               padding: 8px;
               border: 1px solid var(--line-strong, #4a5a70);
               background: var(--panel, #fff);
+              color: var(--text, #213043);
               box-shadow: 0 8px 20px rgb(33 48 67 / 18%);
             }
             .actions {
@@ -219,6 +229,10 @@
         this._details = root.querySelector('details');
         this._summary = root.querySelector('summary');
         this._menu = root.querySelector('.menu');
+        this._summaryLabel = window.document.createElement('span');
+        this._summaryLabel.className = 'summary-label';
+        this._summary.append(this._summaryLabel);
+        if (typeof this._menu.showPopover === 'function') this._menu.setAttribute('popover', 'manual');
         this._details.addEventListener('toggle', () => this._handleToggle());
         this._summary.addEventListener('click', (event) => {
           if (this.disabled) event.preventDefault();
@@ -237,10 +251,12 @@
         this._connected = true;
         window.document.addEventListener('pointerdown', this._onDocumentPointerDown, true);
         window.addEventListener(MULTI_SELECT_OPEN_EVENT, this._onOtherControlOpened);
+        this._handleToggle();
       }
 
       disconnectedCallback() {
         if (!this._connected) return;
+        this.close();
         this._connected = false;
         window.document.removeEventListener('pointerdown', this._onDocumentPointerDown, true);
         window.removeEventListener(MULTI_SELECT_OPEN_EVENT, this._onOtherControlOpened);
@@ -284,6 +300,7 @@
 
       set open(value) {
         this._details.open = value === true && !this.disabled;
+        this._handleToggle();
       }
 
       get disabled() {
@@ -321,7 +338,7 @@
       }
 
       close() {
-        this._details.open = false;
+        this.open = false;
       }
 
       _removeUnavailableValues() {
@@ -336,7 +353,7 @@
           selectedItems: selectedItems.map((item) => ({ ...item })),
           selectedValues: selectedItems.map((item) => item.value)
         };
-        this._summary.textContent = this._formatSummary(summaryContext);
+        this._summaryLabel.textContent = this._formatSummary(summaryContext);
         this._summary.title = selectedItems.map((item) => item.label).join(', ') || this._config.placeholder;
         this._summary.setAttribute('aria-label', this._config.placeholder);
         this._summary.setAttribute('aria-haspopup', 'true');
@@ -364,6 +381,7 @@
           empty.className = 'empty';
           empty.textContent = this._config.emptyText;
           this._menu.append(empty);
+          this._positionMenu();
           return;
         }
 
@@ -402,6 +420,7 @@
           }
           this._menu.append(label);
         });
+        this._positionMenu();
       }
 
       _formatSummary(context) {
@@ -426,14 +445,74 @@
       }
 
       _handleToggle() {
-        if (!this.open) return;
-        if (this.disabled) {
+        if (this.disabled) this._details.open = false;
+        const open = this.open && this._connected;
+        this._summary.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (open === this._menuOpen) return;
+        this._menuOpen = open;
+        if (open) {
+          window.dispatchEvent(new window.CustomEvent(MULTI_SELECT_OPEN_EVENT, {
+            detail: { control: this }
+          }));
+          if (!this._menuOpen) return;
+          // A top-layer popup escapes scrolling panels without leaving its shadow root.
+          this._menu.showPopover?.();
+          this._positionMenu();
+          if (!this._menuOpen) return;
+          window.addEventListener('resize', this._positionMenu);
+          window.document.addEventListener('scroll', this._onScroll, true);
+          if (window.ResizeObserver) {
+            this._resizeObserver = new window.ResizeObserver(this._positionMenu);
+            this._resizeObserver.observe(this);
+          }
+        } else {
+          this._menu.hidePopover?.();
+          window.removeEventListener('resize', this._positionMenu);
+          window.document.removeEventListener('scroll', this._onScroll, true);
+          this._resizeObserver?.disconnect();
+          this._resizeObserver = null;
+        }
+      }
+
+      _positionMenu() {
+        if (!this._menuOpen || !window.getComputedStyle) return;
+        const anchor = this._summary.getBoundingClientRect();
+        const viewport = window.visualViewport;
+        const bounds = {
+          left: (viewport?.offsetLeft || 0) + 8,
+          right: (viewport?.offsetLeft || 0) + (viewport?.width || window.innerWidth) - 8,
+          top: (viewport?.offsetTop || 0) + 8,
+          bottom: (viewport?.offsetTop || 0) + (viewport?.height || window.innerHeight) - 8
+        };
+        const parent = element => element.parentElement || element.getRootNode()?.host;
+        for (let ancestor = parent(this); ancestor; ancestor = parent(ancestor)) {
+          if (!['hidden', 'clip', 'auto', 'scroll'].includes(window.getComputedStyle(ancestor).overflowX)) continue;
+          const rect = ancestor.getBoundingClientRect();
+          bounds.left = Math.max(bounds.left, rect.left + ancestor.clientLeft);
+          bounds.right = Math.min(bounds.right, rect.left + ancestor.clientLeft + ancestor.clientWidth);
+        }
+        if (anchor.width <= 0 || anchor.height <= 0 || anchor.bottom < bounds.top
+          || anchor.top > bounds.bottom || anchor.right < bounds.left || anchor.left > bounds.right
+          || bounds.right <= bounds.left) {
           this.close();
           return;
         }
-        window.dispatchEvent(new window.CustomEvent(MULTI_SELECT_OPEN_EVENT, {
-          detail: { control: this }
-        }));
+        const menu = this._menu;
+        menu.style.setProperty('--menu-available-width', `${bounds.right - bounds.left}px`);
+        menu.style.maxBlockSize = '';
+        const desiredHeight = menu.getBoundingClientRect().height;
+        const below = Math.max(0, bounds.bottom - anchor.bottom - 4);
+        const above = Math.max(0, anchor.top - bounds.top - 4);
+        const placeAbove = below < desiredHeight && above > below;
+        menu.style.maxBlockSize = `${Math.min(desiredHeight, placeAbove ? above : below)}px`;
+        const rect = menu.getBoundingClientRect();
+        menu.style.left = `${Math.max(bounds.left, Math.min(anchor.right - rect.width, bounds.right - rect.width))}px`;
+        menu.style.top = `${placeAbove ? anchor.top - rect.height - 4 : anchor.bottom + 4}px`;
+      }
+
+      _onScroll(event) {
+        if (event.composedPath?.().includes(this._menu)) return;
+        this._positionMenu();
       }
 
       _onDocumentPointerDown(event) {

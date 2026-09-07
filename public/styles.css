@@ -10,6 +10,19 @@
   --danger: #ba6767;
   --green: #62906d;
   --shadow: none;
+  --control-height: 36px;
+  --control-padding: 7px 10px;
+  --control-select-padding: 7px 32px 7px 10px;
+  --control-font: 14px/1.4 "Microsoft YaHei", "PingFang SC", sans-serif;
+  --control-radius: 0;
+  --control-border: var(--line-strong);
+  --control-border-hover: var(--accent);
+  --control-border-focus: var(--accent);
+  --control-focus-ring: color-mix(in srgb, var(--accent) 24%, transparent);
+  --control-bg: #fff;
+  --control-disabled-bg: #edf1f6;
+  --control-disabled-text: var(--muted);
+  --control-select-arrow: url("/icons/chevron-down.svg");
 }
 
 * {
@@ -34,6 +47,37 @@ input,
 select,
 textarea {
   font: inherit;
+}
+
+select:not([multiple]) {
+  height: var(--control-height);
+  min-height: var(--control-height);
+  min-width: 0;
+  padding: var(--control-select-padding);
+  border: 1px solid var(--control-border);
+  border-radius: var(--control-radius);
+  appearance: none;
+  background-color: var(--control-bg);
+  background-image: var(--control-select-arrow);
+  background-position: right 10px center;
+  background-repeat: no-repeat;
+  background-size: 12px 8px;
+  color: var(--text);
+  font: var(--control-font);
+}
+
+select:not([multiple]):where(:hover):not(:disabled) {
+  border-color: var(--control-border-hover);
+}
+
+select:not([multiple]):focus-visible {
+  border-color: var(--control-border-focus);
+  outline: 2px solid var(--control-focus-ring);
+}
+
+select:not([multiple]):disabled {
+  background-color: var(--control-disabled-bg);
+  color: var(--control-disabled-text);
 }
 
 button {
@@ -122,6 +166,9 @@ button:disabled {
 }
 
 .toolbar__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 20px;
   font-weight: 700;
   white-space: nowrap;
@@ -139,8 +186,7 @@ button:disabled {
   color: var(--danger);
 }
 
-.toolbar button,
-.toolbar select {
+.toolbar button {
   min-height: 34px;
   padding: 7px 11px;
   border-radius: 0;
@@ -710,7 +756,7 @@ button:disabled {
 }
 
 .field input,
-.field select,
+.field select[multiple],
 .field textarea {
   width: 100%;
   min-width: 0;
@@ -719,6 +765,10 @@ button:disabled {
   border-radius: 0;
   background: #fff;
   color: var(--text);
+}
+
+.field select {
+  width: 100%;
 }
 
 .field input[type="checkbox"] {
@@ -1140,6 +1190,7 @@ button:disabled {
 
 .collection-list {
   display: grid;
+  grid-auto-rows: max-content;
   align-content: start;
   gap: 8px;
 }
@@ -1151,6 +1202,7 @@ button:disabled {
 
 .collection-item {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 4px;
   width: 100%;
   padding: 10px 12px;
@@ -1182,6 +1234,7 @@ button:disabled {
 }
 
 .collection-item__title {
+  min-height: 1lh;
   font-weight: 800;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1192,7 +1245,11 @@ button:disabled {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.45;
-  overflow-wrap: anywhere;
+  min-width: 0;
+  min-height: 1lh;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .collection-editor__header {
@@ -2715,6 +2772,7 @@ tr.is-selected td,
   }
 
   .resource-bar__selectors {
+    flex: 0 0 auto;
     width: 100%;
     flex-wrap: wrap;
     justify-content: flex-start;
@@ -2752,8 +2810,7 @@ tr.is-selected td,
     display: inline-flex;
   }
 
-  .toolbar button,
-  .toolbar select {
+  .toolbar button {
     min-height: 36px;
     padding: 7px 10px;
   }
@@ -2785,8 +2842,19 @@ tr.is-selected td,
     padding: 12px;
   }
 
-  .inspector {
+  /* Workbenches already edit inline; other views need their inspector below the preview. */
+  .workspace:not(.workspace--no-inspector):not(:has(.collection-workbench:not(.hidden), .sidepanel-workbench:not(.hidden))) {
+    grid-template-rows: minmax(200px, 2fr) minmax(260px, 3fr);
+    overflow: auto;
+  }
+
+  .workspace:has(.collection-workbench:not(.hidden), .sidepanel-workbench:not(.hidden)) > .inspector {
     display: none;
+  }
+
+  .app--managed .inspector {
+    border-left: 0;
+    border-top: 1px solid var(--line-strong);
   }
 
   .sidepanel-workbench {

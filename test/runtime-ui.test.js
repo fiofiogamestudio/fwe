@@ -140,6 +140,38 @@ test('generic multi-select normalizes values and emits framework change events',
   assert.deepEqual([...changes.at(-1).values], ['jiao']);
 });
 
+test('multi-select opening is synchronous, exclusive and cleaned up on disconnect', () => {
+  const runtime = createRuntime();
+  const first = runtime.ui.createMultiSelect();
+  const second = runtime.ui.createMultiSelect();
+  first.connectedCallback();
+  second.connectedCallback();
+  first.open = true;
+  second.open = true;
+  assert.equal(first.open, false);
+  assert.equal(second.open, true);
+  first.shadowRoot.querySelector('details').dispatchEvent({ type: 'toggle' });
+  second.shadowRoot.querySelector('details').dispatchEvent({ type: 'toggle' });
+  assert.equal(second.open, true);
+  second.disabled = true;
+  assert.equal(second.open, false);
+  second.open = true;
+  assert.equal(second.open, false);
+  first.open = true;
+  first.disconnectedCallback();
+  assert.equal(first.open, false);
+  assert.equal(first._menuOpen, false);
+  second.disabled = false;
+  second.open = true;
+  first.open = true;
+  assert.equal(second.open, true);
+  first.connectedCallback();
+  assert.equal(second.open, false);
+  assert.equal(first.shadowRoot.querySelector('summary').attributes.get('aria-expanded'), 'true');
+  first.disconnectedCallback();
+  second.disconnectedCallback();
+});
+
 test('collection filters resolve relational options and default selections', () => {
   const runtime = createRuntime();
   const collection = {
