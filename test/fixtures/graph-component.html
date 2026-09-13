@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>FWE independent graph regression</title>
+  <style>
+    body { margin: 20px; background: #f1f4f8; color: #17263d; font: 14px system-ui, sans-serif; }
+    h1 { font-size: 23px; margin: 0 0 6px; } h2 { font-size: 16px; margin: 14px 0 7px; }
+    p { margin: 6px 0; } .controls { display: flex; gap: 8px; margin: 12px 0; }
+    .controls button { padding: 7px 12px; } #dag { height: 350px; --fg-bg: #eef4ff; }
+    .row { display: grid; grid-template-columns: 2fr 1fr; gap: 18px; }
+    #relations, #empty { height: 330px; } output { white-space: pre-wrap; font: 12px monospace; }
+  </style>
+</head>
+<body>
+  <h1>Independent read-only graphs</h1>
+  <p>Fixture data only · no project files or server writes · DAG join, relationship cycle and empty state</p>
+  <div class="controls">
+    <button id="update">Update presentation</button><button id="select">Select code via API</button>
+    <button id="resize">Resize DAG host</button><button id="destroy">Destroy DAG</button>
+  </div>
+  <h2>DAG · code and art converge before integration</h2><div id="dag"></div>
+  <div class="row">
+    <section><h2>Relationships · cycles and self-loops</h2><div id="relations"></div></section>
+    <section><h2>Empty graph</h2><div id="empty"></div></section>
+  </div>
+  <output id="events">[]</output><output id="immutable"></output>
+  <script src="/runtime.js"></script>
+  <script src="/graph-component.js"></script>
+  <script>
+    'use strict';
+    const freeze = value => { if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); } return value; };
+    const nodes = freeze([
+      { id: 'a', title: 'Brief / 输入', subtitle: 'Version 1 · original input', tone: 'success', badges: ['source', 'readonly'] },
+      { id: 'b', title: 'Code / 实现', subtitle: 'Implementation pending review', tone: 'active', badges: ['task', 'produced ≠ accepted'] },
+      { id: 'c', title: 'Art <img src=x onerror=alert(1)>', subtitle: 'Untrusted markup remains visible text', tone: 'warning', badges: ['asset'] },
+      { id: 'd', title: 'Integration / 汇合', subtitle: 'Requires both code and art', tone: 'neutral', badges: ['multi-predecessor'] }
+    ]);
+    const edges = freeze([
+      { id: 'ab', source: 'a', target: 'b', label: 'implementation' },
+      { id: 'ac', source: 'a', target: 'c', label: 'asset input' },
+      { id: 'bd', source: 'b', target: 'd', label: 'requires code' },
+      { id: 'cd', source: 'c', target: 'd', label: 'requires art' }
+    ]);
+    const original = JSON.stringify({ nodes, edges });
+    const events = [];
+    const record = (graph, id) => { events.push({ graph, id }); document.querySelector('#events').textContent = JSON.stringify(events); };
+    window.fwe = window.createFweRuntime();
+    const dag = window.fwe.ui.createGraph({ host: document.querySelector('#dag'), nodes, edges, layout: 'dag', onSelect: id => record('dag', id) });
+    const relations = window.fwe.ui.createGraph({ host: document.querySelector('#relations'), layout: 'relations',
+      nodes: [{ id: 'a', title: 'Logical reference', tone: 'success' }, { id: 'b', title: 'Version / output', tone: 'danger' }, { id: 'c', title: 'Consumer', tone: 'active' }],
+      edges: [{ id: 'ab', source: 'a', target: 'b', label: 'refers to' }, { id: 'ba', source: 'b', target: 'a', label: 'derived from' },
+        { id: 'bb', source: 'b', target: 'b', label: 'self' }, { id: 'bc', source: 'b', target: 'c', label: 'consumed by' }],
+      onSelect: id => record('relations', id) });
+    window.fwe.ui.createGraph({ host: document.querySelector('#empty'), nodes: [], edges: [] });
+    document.querySelector('#update').onclick = () => {
+      dag.update({ nodes: nodes.map(node => ({ ...node, subtitle: `${node.subtitle} · refreshed` })) });
+      document.querySelector('#immutable').textContent = String(JSON.stringify({ nodes, edges }) === original);
+    };
+    document.querySelector('#select').onclick = () => dag.select('b');
+    document.querySelector('#resize').onclick = () => { document.querySelector('#dag').style.width = '850px'; };
+    document.querySelector('#destroy').onclick = () => { dag.destroy(); dag.destroy(); relations.select('c'); };
+    document.documentElement.dataset.ready = 'true';
+  </script>
+</body>
+</html>

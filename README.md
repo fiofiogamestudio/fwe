@@ -28,6 +28,7 @@ Pass `--no-open` or set `FWE_NO_BROWSER=1` when you only want the server. If the
 | `bin/fwe.js` | CLI entry point |
 | `src/` | server, source loading, DSL compilation, and extension loading |
 | `public/runtime.js` | browser registry API for views, forms, slots, workbench layouts, and reusable controls |
+| `public/graph-component.js` | independently mounted, read-only DAG and relationship graph control |
 | `public/app.js` | app shell, file operations, history, workbench, validation, and shared helpers |
 | `public/graph.js` | fixed graph, free graph, route-lane/tree layout, and blueprint rendering |
 | `public/inspector.js` | inspector form rendering and JSON mode |
@@ -436,6 +437,37 @@ host.append(filter);
 
 Use `configure(...)` for non-emitting model updates, `value` or `setValue(...)` for selection, `selectAll()` / `clear()` for commands, and `open` / `close()` for popup state. Set `--fwe-multi-select-width`, `--fwe-multi-select-menu-width`, and `--fwe-multi-select-menu-max-height` on the returned element when a host layout needs different dimensions. Keep option discovery and filtering semantics in the host extension.
 
+#### Independent read-only graphs
+
+`window.fwe.ui.createGraph(...)` mounts a graph inside a supplied DOM host without using the shell's current domain, selection, inspector, or fixed graph hosts. Multiple instances are independent. The standard page loads `graph-component.js` after `runtime.js`; a custom page must load both scripts and create its runtime with `window.createFweRuntime()`.
+
+```js
+const graph = window.fwe.ui.createGraph({
+  host: document.querySelector('#runGraph'), // give the host an explicit height
+  layout: 'dag', // or 'relations'
+  nodes: [
+    { id: 'draft', title: 'Draft', subtitle: 'Version 1', tone: 'success', badges: ['input'] },
+    { id: 'review', title: 'Review', tone: 'active' }
+  ],
+  edges: [{ id: 'draft-review', source: 'draft', target: 'review', label: 'requires', kind: 'dependency' }],
+  selectedId: 'draft',
+  onSelect(id) { showDetails(id); } // string, or null when the user clears selection
+});
+graph.update({ nodes: nextNodes, edges: nextEdges, selectedId: 'review' });
+graph.select('draft');
+graph.fit();
+// Before unmounting the custom view:
+graph.destroy();
+```
+
+Node and edge ids must be unique, nonempty strings within their respective arrays. Titles, subtitles, badges and edge labels are plain text, never HTML. `tone` supports `neutral`, `success`, `warning`, `danger`, and `active`; unknown tones use `neutral`. `kind` is retained as opaque host metadata and has no built-in execution semantics. Missing edge endpoints are omitted from the canvas and counted as unresolved; duplicate ids and unsupported layouts throw without replacing an existing graph.
+
+Both layouts use deterministic, id-ordered strongly connected components and longest-predecessor ranks. A DAG join is placed after every predecessor, not just its first incoming edge. `relations` permits cycles and self-loops. Cycles in `dag` still render safely but show an explicit `not a DAG` warning; this is visualization, not workflow validation. Presentation-only updates do not reorder nodes. Topology changes may move nodes; this is not a persisted manual layout or a virtualized large-graph renderer.
+
+Click, Enter/Space, arrow keys and Home/End select nodes; Escape clears selection. Upstream and downstream nodes/edges are highlighted. Zoom with the wheel, toolbar, or +/- keys; drag empty canvas to pan; press 0 or Fit to fit. `update()` retains omitted fields and preserves a manually adjusted viewport. `select()` and `update()` are silent to avoid selection feedback loops; only a changed user selection calls `onSelect`. Clearing or removing the selected id leaves no selection. `destroy()` removes only the owned DOM, listeners and resize observer; repeated destruction and later methods are harmless.
+
+The control does not mutate input objects, save data, drag/edit nodes, execute commands, or grant write authority. Host code owns refresh cadence, draft protection, the inspector, reference/version meaning and all business actions. Nodes expose `data-node-id` and edges `data-edge-id` for scoped browser checks. Inherit `--fg-bg`, `--fg-card`, `--fg-text`, `--fg-muted`, `--fg-line`, and `--fg-active` from the host to theme the control. Its default minimum height is 320px.
+
 Workbench references should use FWE resource links instead of assembling app URLs in host code. The helper preserves the current domain, file, and browser session, writes a stable collection/item deep link, and opens a new tab by default:
 
 ```js
@@ -479,7 +511,7 @@ npm run test:all
 npm run pack:dry
 ```
 
-`npm test` runs syntax, example compilation, and unit tests on Node.js 18 or newer. `test:browser` additionally requires Node.js 22 or newer and a local Chrome or Chromium installation. It checks every example domain for browser errors, layout overflow and graph add/undo, then creates an isolated temporary host for real create/edit/save/reopen, conflict, in-flight editing and navigation tests against HTTP and disk. `test:browser:lifecycle` runs only this second suite. CI runs both browser suites on Node.js 22 and uploads their evidence; `test:all` runs the unit/browser suites and verifies the published package contents. Browser textareas may normalize line endings; server text persistence preserves the exact string it receives, not necessarily the original file's byte encoding after a browser edit.
+`npm test` runs syntax, example compilation, and unit tests on Node.js 18 or newer. `test:browser` additionally requires Node.js 22 or newer and a local Chrome or Chromium installation. It checks every example domain for browser errors, layout overflow and graph add/undo, then creates an isolated temporary host for real create/edit/save/reopen, conflict, in-flight editing and navigation tests against HTTP and disk. `test:browser:lifecycle` runs only this second suite. `test:browser:graph` runs the independent graph fixture using real mouse/keyboard input for selection, zoom/pan, fit, refresh and disposal. CI runs all three browser suites on Node.js 22 and uploads their evidence; `test:all` runs the unit/browser suites and verifies the published package contents. Browser textareas may normalize line endings; server text persistence preserves the exact string it receives, not necessarily the original file's byte encoding after a browser edit.
 
 For a focused custom-form probe, `browser-smoke.js` accepts `--domain`, `--file`, `--collection`, `--item`, and `--expect-selector`. Pair `--mutation-button` with `--mutation-selector` to verify that a visible button increases the selected node count and Undo restores it.
 

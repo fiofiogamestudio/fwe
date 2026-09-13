@@ -33,6 +33,8 @@ jobs:
         run: node test/browser-smoke.js --app examples/app.fwe.json --output artifacts/browser-smoke
       - name: Real editor create, save, conflict, and navigation lifecycle
         run: node test/browser-lifecycle.js --output artifacts/browser-lifecycle
+      - name: Independent read-only graph interactions
+        run: node test/browser-graph-component.js --output artifacts/browser-graph
       - uses: actions/upload-artifact@v4
         if: always()
         with:
