@@ -16,7 +16,9 @@ npm test
 node bin/fwe.js --explain flow --app examples/app.fwe.json
 ```
 
-`start.bat` is the canonical Windows launcher. It serves the bundled example app and opens the browser automatically. `npm start` provides the same behavior. Pass `--no-open` or set `FWE_NO_BROWSER=1` when you only want the server. If the same app revision is already running, fwe reuses it. If app, domain, extension, or runtime files changed, fwe rejects the outdated server with an explicit restart message instead of mixing old server state with new browser files. A port owned by another app or service is rejected as well.
+`start.bat` is the canonical Windows launcher. On first launch it copies the bundled example to `.local/demo/`, then serves that editable copy and opens the browser. Later launches preserve your demo files; editing the demo does not change `examples/`. `npm start` provides the same behavior. Use `start.bat --app <config>` for your own app, or `start.bat --check` for a read-only preflight. Startup failures remain visible in the console.
+
+Pass `--no-open` or set `FWE_NO_BROWSER=1` when you only want the server. If the same app revision is already running, fwe reuses it. If app, domain, extension, or runtime files changed, fwe rejects the outdated server with an explicit restart message instead of mixing old server state with new browser files. A port owned by another app or service is rejected as well. Local reports belong in `.local/reports/`; both `.local/` and legacy `reports/` are excluded from Git and npm packages.
 
 ## Project Layout
 
