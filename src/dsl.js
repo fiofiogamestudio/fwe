@@ -1599,6 +1599,13 @@ function applyFieldPresentationAnnotations(context, field, formField) {
   if (step !== undefined) {
     formField.step = step;
   }
+  const length = getAnnotation(field, 'length');
+  if (length) {
+    const min = length.args.named.min ?? length.args.values[0];
+    const max = length.args.named.max ?? length.args.values[1];
+    if (min !== undefined) formField.minLength = min;
+    if (max !== undefined) formField.maxLength = max;
+  }
 
   const extensionPatch = context.extensions?.applyFieldFormAnnotations?.({
     context,

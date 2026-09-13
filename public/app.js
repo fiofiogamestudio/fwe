@@ -682,6 +682,7 @@ async function init() {
   validateAllDomainViews();
   validateAllDomainForms();
   appTitle.textContent = state.app.title;
+  document.title = state.app.title;
   applyAppLabels();
   renderGroupSelect();
   const firstDomain = state.app.domains[0];
@@ -864,6 +865,12 @@ function setManagedNavigationSelection(workspaceConfig, section) {
   renderManagedSectionOptions(workspaceConfig);
   sectionSelect.value = section.id;
   fileSelectorField.hidden = section.hideFile === true;
+  const singleWorkspace = getManagedWorkspaces().length === 1;
+  const singleSection = workspaceConfig.sections.length === 1;
+  workspaceSelect.closest('label').hidden = singleWorkspace;
+  sectionSelect.closest('label').hidden = singleSection;
+  appRoot?.classList.toggle('app--managed-single-section', singleSection);
+  appRoot?.classList.toggle('app--managed-no-navigation', singleWorkspace && singleSection);
   renderManagedSidebar(workspaceConfig, section);
 }
 
@@ -957,7 +964,10 @@ async function activateManagedSection(workspaceConfig, section) {
       return false;
     }
     setManagedNavigationSelection(workspaceConfig, section);
-    setStatus(`${getAppLabel('opened')} ${getResourceDisplayName()}`);
+    const title = getResourceDisplayName();
+    setStatus(hasUnsavedChanges()
+      ? formatAppLabel('dirty', '已修改 - {title}', { title })
+      : getManagedWorkspaces().length ? '' : `${getAppLabel('opened')} ${title}`);
     return true;
   } finally {
     workspaceSelect.disabled = false;
@@ -1241,7 +1251,7 @@ async function openSelectedFile(options = {}) {
     fileSelect.value = state.file.name;
     clearServerDiagnostics();
     resetHistory();
-    setStatus(`${getAppLabel('opened')} ${getResourceDisplayName(state.file.name)}`);
+    setStatus(getManagedWorkspaces().length ? '' : `${getAppLabel('opened')} ${getResourceDisplayName(state.file.name)}`);
     render();
     dispatchResourceEvent('fwe:resource-opened');
     return true;
@@ -1589,6 +1599,7 @@ async function navigateToResource(target = {}, options = {}) {
     return true;
   }
 
+  const previousCollectionId = state.workbench.collectionId;
   const applied = applyWorkbenchNavigationTarget(navigation);
   if (!applied) {
     return false;
@@ -1597,6 +1608,12 @@ async function navigateToResource(target = {}, options = {}) {
     window.history.pushState(null, '', buildNavigationHref(currentNavigationTarget()));
   }
   resetJsonDraftState();
+  if (previousCollectionId !== state.workbench.collectionId) {
+    const title = getResourceDisplayName();
+    setStatus(hasUnsavedChanges()
+      ? formatAppLabel('dirty', '已修改 - {title}', { title })
+      : getManagedWorkspaces().length ? '' : `${getAppLabel('opened')} ${title}`);
+  }
   render();
   return true;
 }
@@ -1850,6 +1867,7 @@ function updateActionButtons() {
   const hasFile = !!state.file && state.resourceReady && !state.resourceLoading;
   const canCreateFile = domainAllowsNewFile(state.domain);
   setCommandVisible(newButton, canCreateFile);
+  setCommandVisible(saveButton, state.domain?.actions?.save !== false);
   setCommandVisible(undoButton, isActionVisible('undo'));
   setCommandVisible(redoButton, isActionVisible('redo'));
   setCommandVisible(addButton, hasSurfaceActions() && isActionVisible('add'));

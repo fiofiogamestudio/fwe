@@ -1,0 +1,31 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="/styles.css"></head>
+<body><main id="fixture"></main><pre id="events">[]</pre>
+<script src="/runtime.js"></script><script src="/inspector.js"></script><script src="/surface.js"></script>
+<script>
+(async function () {
+  const config = await (await fetch('/surface.json')).json();
+  const events = [];
+  const data = { name: 'Original', quality: 'hd', apiKey: 'never-render-this-value' };
+  const record = value => { events.push(value); document.querySelector('#events').textContent = JSON.stringify(events); };
+  window.surface = window.createFweRuntime().ui.createSurface(config, {
+    data,
+    resolveField: name => ({ name: { type: 'text', maxLength: 20, required: true }, quality: { type: 'select', options: [{ value: 'auto', label: 'Auto' }, { value: 'standard', label: 'Standard' }, { value: 'hd', label: 'HD' }] } })[name],
+    onChange: ({ path, value }) => record({ path, value }),
+    actions: {
+      updateState: () => window.surface.update({ busy: true, notice: 'Typing in place', tone: 'info', hint: 'Busy' }),
+      ready: () => window.surface.update({ busy: false, notice: '', tone: null, hint: null }),
+      submit: ({ refs }) => record({ command: 'submit', name: refs.name.value, quality: refs.quality.value, secretPresent: !!refs.secret.value }),
+      switch: () => {
+        window.retiredSecret = document.querySelector('#alternateSecret');
+        const node = window.surface.render('alternate', { title: 'Configuration changed' });
+        document.querySelector('#alternate').replaceChildren(node);
+      },
+      options: () => window.surface.setOptions('quality', [{ value: 'auto', label: 'Automatic' }]),
+      clear: () => window.surface.dispose()
+    }
+  });
+  document.querySelector('#fixture').append(window.surface.root);
+  document.documentElement.dataset.ready = 'true';
+})();
+</script></body></html>

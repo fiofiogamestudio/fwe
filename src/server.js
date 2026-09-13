@@ -24,7 +24,8 @@ const SERVER_INTEGRATION_CONTRACT = Object.freeze({
   requestGuard: 'await-before-routing-v1',
   extensions: 'sync-setup-async-handlers-v1',
   launchRevision: LAUNCH_REVISION_VERSION,
-  runtimeFingerprint: 'fwe-runtime-v1'
+  runtimeFingerprint: 'fwe-runtime-v1',
+  configuredSurfaces: 'native-inspector-v1'
 });
 
 function getServerRuntimeFingerprint() {
@@ -453,9 +454,7 @@ function createLaunchRevision(appPath, appDir, workspaceDir, domainRefs, clientE
   collectLaunchRevisionFiles(files, path.join(appDir, 'extensions'));
 
   for (const ref of domainRefs) {
-    if (typeof ref === 'string') {
-      addLaunchRevisionFile(files, path.resolve(appDir, ref));
-    }
+    resolveDomainConfig(ref, appDir, {}, new Set(), files);
   }
   for (const extension of clientExtensions) {
     addLaunchRevisionFile(files, extension.path);
@@ -464,7 +463,7 @@ function createLaunchRevision(appPath, appDir, workspaceDir, domainRefs, clientE
 
   if (fs.existsSync(appDir)) {
     for (const entry of fs.readdirSync(appDir, { withFileTypes: true })) {
-      if (entry.isFile() && entry.name.toLowerCase().endsWith('.config.json')) {
+      if (entry.isFile() && /\.(config|ui)\.json$/i.test(entry.name)) {
         addLaunchRevisionFile(files, path.join(appDir, entry.name));
       }
     }
@@ -762,9 +761,7 @@ function normalizeAppNavigation(value, domains) {
 }
 
 function loadDomainConfig(ref, appDir, options = {}) {
-  const rawDomain = typeof ref === 'string'
-    ? readDomainConfigFile(path.resolve(appDir, ref), options)
-    : clone(ref);
+  const rawDomain = resolveDomainConfig(ref, appDir, options);
 
   if (!isPlainObject(rawDomain)) {
     throw new Error('Domain config must be an object or a config path.');
@@ -1127,6 +1124,30 @@ function normalizeWorkbenchCollectionList(collections) {
     delete result.views;
     return result;
   });
+}
+
+// JSON overlays keep schema compilation authoritative while configuring actions
+// and extension presentation in the app manifest. Paths follow their owner file.
+function resolveDomainConfig(ref, appDir, options = {}, visiting = new Set(), files) {
+  let raw, ownerDir = appDir, configPath;
+  if (typeof ref === 'string') {
+    configPath = path.resolve(appDir, ref);
+    if (visiting.has(configPath)) throw new Error(`Circular domain extends: ${configPath}`);
+    visiting.add(configPath);
+    files?.add(configPath);
+    ownerDir = path.dirname(configPath);
+    // Revision discovery only needs dependency paths; avoid recompiling a DSL
+    // without its application extension registry.
+    raw = files && configPath.endsWith('.fwe') ? {} : readDomainConfigFile(configPath, options);
+  } else raw = clone(ref);
+  if (!isPlainObject(raw)) throw new Error('Domain config must be an object or a config path.');
+  if (raw.extends !== undefined) {
+    if (typeof raw.extends !== 'string' || !raw.extends.trim()) throw new Error('Domain extends must be a config path.');
+    const { extends: basePath, ...overlay } = raw;
+    raw = deepMerge(resolveDomainConfig(basePath, ownerDir, options, visiting, files), overlay);
+  }
+  if (configPath) visiting.delete(configPath);
+  return raw;
 }
 
 function readDomainConfigFile(configPath, options = {}) {

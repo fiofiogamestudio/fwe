@@ -1,0 +1,31 @@
+{
+  "root": "main",
+  "templates": {
+    "main": {
+      "type": "stack",
+      "children": [
+        { "type": "toolbar", "children": [
+          { "type": "button", "id": "poll", "text": "Refresh state", "on": { "click": "poll" } },
+          { "type": "text", "text": { "$path": "notice" } }
+        ] },
+        { "type": "columns", "preset": "workspace", "id": "workspace", "children": [
+          { "type": "stack", "id": "mainArea", "children": [
+            { "type": "heading", "text": "Preview" },
+            { "type": "image", "preset": ["preview", "stage", "image"], "id": "preview", "attrs": { "alt": "Tall preview fixture", "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='800' height='1200'%3E%3Crect x='240' y='240' width='320' height='720' rx='80' fill='%23516e9e'/%3E%3C/svg%3E" } }
+          ] },
+          { "type": "stack", "id": "parameters", "children": [
+            { "type": "heading", "text": "Parameters" },
+            { "type": "fieldset", "id": "fields", "children": [
+              { "type": "field", "field": { "type": "text", "label": "Name" }, "value": "Untitled" },
+              { "type": "button", "id": "primary", "tone": "primary", "text": "Build preview" }
+            ] },
+            { "type": "details", "id": "advanced", "attrs": { "open": { "$path": "needsSetup" } }, "children": [
+              { "type": "summary", "id": "advancedSummary", "text": "Advanced settings" },
+              { "type": "field", "field": { "type": "number", "label": "Scale" }, "value": 1 }
+            ] }
+          ] }
+        ] }
+      ]
+    }
+  }
+}

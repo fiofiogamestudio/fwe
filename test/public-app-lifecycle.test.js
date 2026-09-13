@@ -64,7 +64,7 @@ function shell(options = {}) {
     }
   };
   vm.createContext(context);
-  vm.runInContext(['createFile', 'saveFile', 'openSelectedFile', 'loadFiles', 'refreshCurrentResource', 'resourceSaveKey', 'isCurrentResource']
+  vm.runInContext(['createFile', 'saveFile', 'openSelectedFile', 'loadFiles', 'refreshCurrentResource', 'resourceSaveKey', 'isCurrentResource', 'getManagedWorkspaces']
     .map(functionSource).join('\n'), context);
   return { state, effects, context, save: context.saveFile, create: context.createFile, open: context.openSelectedFile, refresh: context.refreshCurrentResource };
 }
@@ -80,6 +80,33 @@ test('unique file creation produces a dirty create-only draft without overwritin
   assert.equal(app.effects.requests[0].payload.createOnly, true);
   assert.equal(app.state.file.exists, true);
   assert.equal(app.state.file.revision, 'r1');
+});
+
+test('API collection navigation refreshes status and keeps unsaved state visible', async () => {
+  const app = shell({ state: {
+    app: { domains: [{ id: 'art', kind: 'document' }] },
+    domain: { id: 'art', kind: 'document' }, file: { name: 'drafts.json' },
+    workbench: { collectionId: 'reskin' }, dirty: false, data: { values: [] }
+  } });
+  app.context.applyWorkbenchNavigationTarget = target => {
+    if (target.collectionId === 'missing') return false;
+    app.state.workbench.collectionId = target.collectionId; return true;
+  };
+  app.context.getResourceDisplayName = () => app.state.workbench.collectionId;
+  vm.runInContext(functionSource('navigateToResource'), app.context);
+  assert.equal(await app.context.navigateToResource({ domainId: 'art', fileName: 'drafts.json', collectionId: 'generate' }), true);
+  assert.equal(app.effects.statuses.at(-1)[0], 'opened generate');
+  app.state.app.navigation = { workspaces: [{ id: 'art' }] };
+  assert.equal(await app.context.navigateToResource({ collectionId: 'models' }), true);
+  assert.equal(app.effects.statuses.at(-1)[0], '', 'managed navigation has no redundant opened banner');
+  app.state.dirty = true;
+  assert.equal(await app.context.navigateToResource({ collectionId: 'images' }), true);
+  assert.equal(app.effects.statuses.at(-1)[0], 'dirty:{"title":"images"}');
+  const statuses = app.effects.statuses.length;
+  assert.equal(await app.context.navigateToResource({ collectionId: 'images', itemId: 'next' }), true);
+  assert.equal(app.effects.statuses.length, statuses, 'same-collection item hydration does not replace detailed status');
+  assert.equal(await app.context.navigateToResource({ collectionId: 'missing' }), false);
+  assert.equal(app.effects.statuses.length, statuses);
 });
 
 test('existing names (case-insensitive), disabled New, and cancelled discard preserve current edits', async () => {

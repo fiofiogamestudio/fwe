@@ -1,0 +1,22 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/styles.css"></head>
+<body><div class="app app--managed">
+  <header class="toolbar"><strong>Workspace layout fixture</strong></header>
+  <section id="resourceContextBar" class="resource-context-bar"><div class="resource-bar__selectors">
+    <div class="managed-navigation"><label>Section <select><option>Workspace</option></select></label></div>
+    <div class="technical-navigation hidden"></div><label id="fileSelectorField" hidden></label><div class="resource-bar__project-context"></div>
+  </div></section>
+  <main id="fixture"></main>
+</div>
+<script src="/runtime.js"></script><script src="/inspector.js"></script><script src="/surface.js"></script>
+<script>
+(async function () {
+  const config = await (await fetch('/surface-workspace.json')).json();
+  window.surface = window.createFweRuntime().ui.createSurface(config, {
+    data: { needsSetup: true },
+    actions: { poll: () => window.surface.update({ needsSetup: true, notice: 'Updated' }) }
+  });
+  document.querySelector('#fixture').append(window.surface.root);
+  document.documentElement.dataset.ready = 'true';
+})();
+</script></body></html>

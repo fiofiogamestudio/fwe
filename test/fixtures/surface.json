@@ -1,0 +1,32 @@
+{
+  "root": "main",
+  "templates": {
+    "main": {
+      "type": "card",
+      "children": [
+        { "type": "heading", "text": "Configured workbench" },
+        { "type": "form", "on": { "submit": "submit" }, "children": [
+          { "type": "field", "ref": "name", "id": "name", "field": { "schemaPath": "name", "label": "Asset name", "path": "name", "maxLength": 999 }, "value": { "$path": "name" }, "on": { "input": "updateState", "blur": "ready" } },
+          { "type": "field", "ref": "quality", "id": "quality", "field": { "schemaPath": "quality", "label": "Quality", "path": "quality", "options": ["auto"] }, "value": { "$path": "quality" } },
+          { "type": "field", "ref": "secret", "id": "secret", "field": { "type": "password", "label": "Temporary key", "path": "apiKey" }, "value": { "$path": "apiKey" } },
+          { "type": "field", "id": "file", "field": { "type": "file", "label": "Upload", "accept": "image/png" } },
+          { "type": "field", "id": "enabled", "field": { "type": "checkbox", "label": "Enabled", "path": "enabled" } },
+          { "type": "button", "id": "submit", "text": { "$if": [{ "$path": "busy" }, "Working", "Run command"] }, "attrs": { "type": "submit", "disabled": { "$path": "busy" }, "title": { "$path": "hint" }, "aria-busy": { "$path": "busy", "default": false } } }
+        ] },
+        { "type": "toolbar", "children": [
+          { "type": "button", "id": "switch", "text": "Alternate configuration", "on": { "click": "switch" } },
+          { "type": "button", "id": "options", "text": "Refresh choices", "on": { "click": "options" } },
+          { "type": "button", "id": "clear", "text": "Dispose", "on": { "click": "clear" } }
+        ] },
+        { "type": "slot", "id": "alternate" },
+        { "type": "text", "id": "status", "text": { "$path": "notice" }, "tone": { "$path": "tone" }, "visible": { "$path": "notice" } }
+      ]
+    },
+    "alternate": { "type": "columns", "columns": 3, "children": [
+      { "type": "heading", "text": { "$path": "title" } },
+      { "type": "text", "text": "Only JSON defines this layout" },
+      { "type": "badge", "text": "Ready", "tone": "success" },
+      { "type": "field", "ref": "alternateSecret", "id": "alternateSecret", "field": { "type": "password", "label": "Fragment temporary key" } }
+    ] }
+  }
+}

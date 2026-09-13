@@ -417,6 +417,123 @@ New drafts carry `exists: false` and use `createOnly` on their first save, so a 
 
 ### Reusable Browser Controls
 
+`window.fwe.ui.createSurface(config, bindings)` composes ordinary controls around
+specialized views from **JSON configuration**. Use native collection layouts and
+inspector forms when those already describe the editor. For a canvas workbench,
+keep its layout, labels, parameters, command placement and conditional content in
+JSON; keep asset processing and canvas interaction in the domain controller.
+
+```json
+{
+  "root": "main",
+  "texts": { "ready": "{count} assets ready" },
+  "templates": {
+    "main": {
+      "type": "columns",
+      "children": [
+        { "type": "field", "ref": "name", "field": {
+          "schemaPath": "assets[].name", "label": "Asset name"
+        }, "value": { "$path": "name" } },
+        { "type": "button", "text": "Build", "on": { "click": "build" },
+          "attrs": { "disabled": { "$path": "busy" } } },
+        { "type": "slot", "ref": "preview", "preset": "preview" }
+      ]
+    }
+  }
+}
+```
+
+```js
+const surface = window.fwe.ui.createSurface(config, {
+  data: viewState,
+  // Return metadata from the compiled model/inspector, rather than duplicating
+  // enum values, validation ranges and required flags in a second UI schema.
+  resolveField: (schemaPath) => modelFields[schemaPath],
+  onChange: ({ path, value }) => updateDraft(path, value),
+  actions: { build: ({ refs }) => buildAsset(refs.name.value) }
+});
+host.append(surface.root);
+mountDomainPreview(surface.refs.preview);
+```
+
+`config` must be JSON: `{ root?, templates, texts?, fields? }`. A field can use an
+inline `field` object or a string referencing `config.fields`. `bindings.fields`
+can supply compiled metadata for these named fields. An unresolved `schemaPath`
+fails visibly. The model's enum, required flag, numeric range, step, string length
+and value type take precedence over presentation overrides and HTML attributes.
+`optionLabels` changes labels while preserving model enum values.
+
+Nodes support `stack`, `row`, `columns`, `card`, `toolbar`, `text`, `heading`,
+`button`, `field`, `image`, `link`, `canvas`, `slot`, `list`, `form`, `fieldset`,
+`details`, `summary`, `pre`, `badge`, `label`, `separator` and `template`.
+`children` declares nesting; `columns` is 1–4. Layout presets are `editor`,
+`workspace`, `comparison`, `preview`, `stage`, `thumbnail`, `overlay`, `image`, `ghost`, `scroll` and `compact`;
+`preset` accepts one name or an array. These presets use the FWE theme. Arbitrary
+CSS, style/class attributes, HTML strings, scripts and inline handlers are not
+accepted. Domain-specific canvas drawing can mount inside a configured `slot`.
+
+`workspace` expects two child areas: a primary preview/editor and its parameters.
+The first consumes available width; the second is approximately 340 pixels wide.
+They wrap to full-width rows when the actual container cannot fit both, and
+shorter areas do not stretch to match their neighbors. Use `stack` for ordinary
+groups and `details` for secondary options instead of nesting cards. Fieldsets
+keep native disabled behavior without another border. `tone: "primary"` gives
+the main command the theme accent fill. Combine `preview` with `stage` for a
+420-pixel main canvas (340 on narrow screens), or `thumbnail` for a 180-pixel
+secondary preview. Preview images use `contain` and a bounded height.
+
+In managed desktop navigation, FWE omits the empty resource context bar when the
+section hides its file selector and no project context exists. Narrow screens
+retain the section selectors. A configured `details.attrs.open` sets the initial
+state; subsequent updates change it only when its bound condition changes, so
+polling does not reopen a section the user collapsed.
+
+Dynamic values use `{ "$path": "item.name" }` (optional `default`),
+`{ "$text": "ready", "vars": { "count": { "$path": "count" } } }`, `$not`,
+`$eq` (two values), `$if` (`[condition, yes, no]`), `$and` or `$or`. Paths only access own properties; expressions
+are never evaluated as JavaScript. `visible`, `hidden`, `attrs`, `text` and field
+configuration support these bindings. Lists use `items` plus `template`; each
+row receives parent data, item properties, `$item` and `$index`.
+
+Surface fields use the **same control renderer, option renderer and value reader
+as native inspector forms**. Supported controls include text, number, textarea,
+select/reference, checkbox, readonly, range, color, URL/email/search, password
+and file. Password and file controls start empty, ignore bound initial values
+and do not invoke automatic `onChange` or native document commits. An explicit
+command can read their DOM value/files; disposing the surface clears them.
+
+`on` maps DOM event names to `bindings.actions` names; a handler receives
+`{ event, element, data, refs, surface, value }`. A configured form retains native
+validation and prevents browser navigation on submit. Ordinary field changes
+call `bindings.onChange({ path, value, event, data, element, field, refs, surface })`;
+the controller decides how to update FWE history and draft state. Rendering a
+surface never implicitly invokes business commands or changes model data.
+
+`surface.render(templateId, data?)` returns an element with its own `.refs`, so
+repeated fragments do not share controls. `surface.refs` maps the most recent
+`ref`, `id` and `testId` declarations; field refs point to the actual control,
+and `ref + 'Field'` points to its label wrapper.
+
+`surface.update(patch, subtree?)` updates configured text, visibility, tone and
+attributes in place. Pass domain state/capabilities such as `{ busy, canSave,
+notice }`; configuration decides which controls display them. An omitted
+subtree applies the patch to every rendered fragment and supplies it to future
+renders. A subtree limits changes to that element's descendants. Updates preserve
+focus, event bindings and options; input values only synchronize when the patch
+contains a path referenced by an explicit `value`/`checked` binding. Thus status
+polls cannot erase text the user is currently entering. `null`/`undefined`
+attributes are removed, boolean `false` clears native disabled/hidden state, and
+ARIA/data booleans retain their string representation. Event handlers receive
+the updated fragment data. A `text` binding alongside configured children owns
+its own text node, so updating the label does not discard child controls.
+
+`surface.text(key, vars?)` reads
+configured messages. `surface.setOptions(controlOrRef, rows, selected?)` shares
+native option rendering and preserves model enums and unavailable current
+values instead of silently replacing them. Removed fragments automatically
+release event bindings and secrets; `release(fragment)` allows explicit early
+cleanup. `dispose()` releases the entire surface.
+
 Custom views should use FWE controls for interaction patterns that are not domain-specific. The multi-select control owns its popup, grouping, counts, select-all/clear actions, outside-click and Escape handling, and change events. The host supplies only labels, items, selected values, and domain behavior:
 
 ```js

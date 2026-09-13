@@ -645,9 +645,12 @@ function renderInspectorField(field, target, context) {
 
   const value = getByPath(target, field.path);
   const control = createInspectorControl(field, value, context, target);
-  control.addEventListener(getInspectorCommitEvent(field), () => {
-    commitInspectorField(field, target, control, context);
-  });
+  // Secret and file inputs belong to explicit commands, never the document model.
+  if (!isInspectorTransientControl(field)) {
+    control.addEventListener(getInspectorCommitEvent(field), () => {
+      commitInspectorField(field, target, control, context);
+    });
+  }
   if (isInspectorPendingInputControl(field, control)) {
     control.addEventListener('input', () => {
       markInspectorFieldPending(control, context);
@@ -764,7 +767,7 @@ function wrapInspectorMarkupSelection(input, tagId) {
 }
 
 function isInspectorPendingInputControl(field, control) {
-  if (!control || control.disabled || control.readOnly || field.type === 'readonly') {
+  if (!control || control.disabled || control.readOnly || field.type === 'readonly' || isInspectorTransientControl(field)) {
     return false;
   }
   if (control.tagName === 'TEXTAREA') {
@@ -801,26 +804,14 @@ function createInspectorControl(field, value, context, target) {
     textarea.rows = field.rows || 4;
     textarea.placeholder = field.placeholder || '';
     textarea.required = !!field.required;
+    applyInspectorControlConstraints(textarea, field);
     return textarea;
   }
 
   if (field.type === 'select' || field.type === 'reference') {
     const select = document.createElement('select');
     const options = buildInspectorOptions(field, context, target);
-    if (field.emptyLabel !== undefined) {
-      const option = document.createElement('option');
-      option.value = '';
-      option.textContent = field.emptyLabel;
-      select.append(option);
-    }
-    options.forEach((item) => {
-      const option = document.createElement('option');
-      option.value = String(item.value);
-      const mappedLabel = field.optionLabels?.[String(item.value)];
-      option.textContent = mappedLabel ?? item.label ?? String(item.value);
-      select.append(option);
-    });
-    select.value = value === undefined || value === null ? '' : String(value);
+    setInspectorControlOptions(select, field, options, value);
     select.required = !!field.required;
     return select;
   }
@@ -833,20 +824,49 @@ function createInspectorControl(field, value, context, target) {
   }
 
   const input = document.createElement('input');
-  input.type = field.type === 'number' ? 'number' : 'text';
-  input.value = value ?? '';
+  input.type = ['number', 'password', 'file', 'range', 'color', 'url', 'email', 'search'].includes(field.type) ? field.type : 'text';
+  if (!isInspectorTransientControl(field)) input.value = value ?? '';
+  if (field.type === 'password') input.autocomplete = 'off';
+  if (field.type === 'file') {
+    input.accept = field.accept || '';
+    input.multiple = !!field.multiple;
+  }
   input.placeholder = field.placeholder || '';
   input.required = !!field.required;
-  if (field.min !== undefined) {
-    input.min = String(field.min);
-  }
-  if (field.max !== undefined) {
-    input.max = String(field.max);
-  }
-  if (field.step !== undefined) {
-    input.step = String(field.step);
-  }
+  applyInspectorControlConstraints(input, field);
   return input;
+}
+
+function isInspectorTransientControl(field) {
+  return field.type === 'password' || field.type === 'file' || field.transient === true;
+}
+
+function applyInspectorControlConstraints(control, field) {
+  for (const name of ['min', 'max', 'step', 'minLength', 'maxLength', 'pattern']) {
+    if (field[name] !== undefined) control[name] = String(field[name]);
+  }
+  control.disabled = !!field.disabled;
+  control.readOnly = !!field.readOnly;
+}
+
+// Shared by inspector forms and configuration-driven surfaces. Unknown values are
+// retained visibly instead of silently becoming an empty option on the next edit.
+function setInspectorControlOptions(select, field, options, value) {
+  select.replaceChildren();
+  const selected = value === undefined || value === null ? '' : String(value);
+  const rows = (options || []).map(item => item && typeof item === 'object' ? item : { value: item, label: item });
+  if (field.emptyLabel !== undefined) rows.unshift({ value: '', label: field.emptyLabel });
+  if (selected && !rows.some(item => String(item.value) === selected)) rows.push({ value: selected, label: selected, unavailable: true });
+  for (const item of rows) {
+    const option = document.createElement('option');
+    option.value = String(item.value ?? '');
+    const mappedLabel = field.optionLabels?.[option.value];
+    option.textContent = mappedLabel ?? item.label ?? option.value;
+    option.disabled = !!item.disabled;
+    if (item.unavailable) option.dataset.unavailable = 'true';
+    select.append(option);
+  }
+  select.value = selected;
 }
 
 function renderInspectorFormExtensionField(field, target, context, hooks = {}) {
@@ -1335,6 +1355,7 @@ function commitInspectorField(field, target, control, context) {
 }
 
 function readInspectorControlValue(field, control) {
+  if (field.type === 'file') return Array.from(control.files || []);
   if (field.type === 'checkbox') {
     return !!control.checked;
   }
@@ -1346,7 +1367,7 @@ function readInspectorControlValue(field, control) {
     const parsed = Number.parseInt(value, 10);
     return Number.isFinite(parsed) ? parsed : undefined;
   }
-  if (field.value === 'number' || field.valueType === 'number' || field.type === 'number') {
+  if (field.value === 'number' || field.valueType === 'number' || field.type === 'number' || field.type === 'range') {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : undefined;
   }

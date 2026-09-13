@@ -665,6 +665,10 @@
       normalizeWorkbenchLayoutId: options.normalizeWorkbenchLayoutId || normalizeWorkbenchLayoutId,
       ui: {
         createMultiSelect,
+        createSurface: (config, bindings) => {
+          if (typeof window.createFweSurface !== 'function') throw new Error('FWE surface.js is not loaded.');
+          return window.createFweSurface(config, bindings);
+        },
         createGraph: (graphOptions) => {
           if (typeof window.createFweGraph !== 'function') throw new Error('FWE graph-component.js is not loaded.');
           return window.createFweGraph(graphOptions);
