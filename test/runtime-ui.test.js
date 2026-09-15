@@ -211,6 +211,65 @@ test('collection filters resolve relational options and default selections', () 
   assert.deepEqual(runtime.collectionFilters.matchingValues(filter, options, { id: 'other' }), ['other']);
 });
 
+test('collection filter options can depend on another filter selection', () => {
+  const runtime = createRuntime();
+  const collection = {
+    filters: [{
+      id: 'pack',
+      label: '内容包',
+      itemPath: 'ownerPackId',
+      options: {
+        path: '_editor.assetPacks',
+        value: 'id',
+        label: 'name'
+      }
+    }, {
+      id: 'pool',
+      label: '骰子范围',
+      itemValue: 'id',
+      options: {
+        dependsOn: 'pack',
+        dependsOnField: 'packId',
+        path: '_editor.dicePools.groups',
+        value: 'id',
+        label: 'name',
+        members: 'memberDiceIds',
+        count: 'matchedDiceCount'
+      }
+    }]
+  };
+
+  const data = {
+    _editor: {
+      assetPacks: [
+        { id: 'cat', name: '胡椒' },
+        { id: 'jiao', name: '蛟' }
+      ],
+      dicePools: {
+        groups: [
+          { id: 'cat::starter', packId: 'cat', name: '胡椒-基础', memberDiceIds: ['cat_a'], matchedDiceCount: 1 },
+          { id: 'jiao::starter', packId: 'jiao', name: '蛟-基础', memberDiceIds: ['jiao_a'], matchedDiceCount: 1 }
+        ]
+      }
+    }
+  };
+
+  const [packFilter, poolFilter] = runtime.collectionFilters.normalize(collection).map((item) => item);
+  const allPools = runtime.collectionFilters.resolveOptions(poolFilter, data, {
+    filterValues: { pack: ['cat', 'jiao'] }
+  });
+  assert.deepEqual(allPools.map((option) => option.value), ['cat::starter', 'jiao::starter']);
+  assert.deepEqual(
+    runtime.collectionFilters.resolveOptions(poolFilter, data, { filterValues: { pack: ['cat'] } }).map((option) => option.value),
+    ['cat::starter']
+  );
+  assert.deepEqual(
+    runtime.collectionFilters.resolveOptions(poolFilter, data, { filterValues: { pack: ['cat', 'jiao'] } }).map((option) => option.value),
+    ['cat::starter', 'jiao::starter']
+  );
+  assert.equal(runtime.collectionFilters.resolveOptions(poolFilter, data, { filterValues: { pack: [] } }).length, 0);
+});
+
 test('generic resource links delegate href construction to framework navigation', () => {
   const runtime = createRuntime();
   runtime.navigation = {

@@ -3381,8 +3381,10 @@ function getFilteredCollectionRows(collection) {
 
 function getAppliedCollectionFilters(collection) {
   return fweRuntime.collectionFilters.normalize(collection).map((filter) => {
-    const options = fweRuntime.collectionFilters.resolveOptions(filter, state.data || {});
     const collectionValues = getCollectionFilterValueState(collection);
+    const options = fweRuntime.collectionFilters.resolveOptions(filter, state.data || {}, {
+      filterValues: collectionValues
+    });
     if (!Object.prototype.hasOwnProperty.call(collectionValues, filter.id)) {
       collectionValues[filter.id] = fweRuntime.collectionFilters.defaultSelection(filter, options);
     } else {

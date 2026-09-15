@@ -561,15 +561,19 @@
       });
   }
 
-  function resolveCollectionFilterOptions(filter = {}, data = {}) {
+  function resolveCollectionFilterOptions(filter = {}, data = {}, context = {}) {
     const config = getCollectionFilterOptionConfig(filter);
     const configuredItems = Array.isArray(filter.options)
       ? filter.options
       : (Array.isArray(config.items) ? config.items : null);
     const source = configuredItems || normalizeFilterValues(readFilterPath(data, config.path || filter.optionsPath));
+    const dependencyValues = readFilterDependencyValues(config.dependsOn, context.filterValues);
+    const filteredSource = dependencyValues === null
+      ? source
+      : source.filter((entry) => matchesFilterDependency(entry, config, dependencyValues));
     const defaultWhen = normalizeFilterValues(config.defaultWhen || filter.optionDefaultWhen);
     const seen = new Set();
-    return source
+    return filteredSource
       .map((entry) => {
         const value = entry && typeof entry === 'object'
           ? readFilterPath(entry, config.value || filter.optionValue || 'value') ?? entry.id
@@ -602,6 +606,35 @@
         };
       })
       .filter(Boolean);
+  }
+
+  function readFilterDependencyValues(dependsOn, selectedValues = {}) {
+    const dependsOnIds = normalizeFilterValues(dependsOn);
+    if (!dependsOnIds.length || !selectedValues || typeof selectedValues !== 'object') {
+      return null;
+    }
+    const values = dependsOnIds.flatMap((filterId) => (
+      normalizeFilterValues(selectedValues[String(filterId)])
+    ));
+    return [...new Set(values)];
+  }
+
+  function matchesFilterDependency(entry, config = {}, dependencyValues = []) {
+    const dependsOn = normalizeFilterValues(config.dependsOn);
+    if (!dependsOn.length) return true;
+    const selected = new Set(normalizeFilterValues(dependencyValues).map((value) => String(value).trim()).filter(Boolean));
+    if (!selected.size) return false;
+    const field = String(config.dependsOnField || '').trim();
+    if (!field || !entry || typeof entry !== 'object') {
+      return true;
+    }
+    const rawValues = normalizeFilterValues(readFilterPath(entry, field)).map((value) => String(value).trim());
+    if (!rawValues.length) return false;
+    const matchMode = String(config.dependsOnMatch || 'any').trim().toLowerCase();
+    if (matchMode === 'all') {
+      return rawValues.every((value) => selected.has(value));
+    }
+    return rawValues.some((value) => selected.has(value));
   }
 
   function getDefaultCollectionFilterSelection(filter = {}, options = []) {
