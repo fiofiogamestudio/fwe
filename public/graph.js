@@ -33,12 +33,16 @@ function showGraphContextMenu(x, y, nodeKey) {
   if (!nodeKey) {
     return;
   }
+  if (state.jsonDirty) {
+    setStatus(getAppLabel('applyJsonBeforeNavigation', '请先应用或还原 JSON 草稿，再切换节点。'), true);
+    return;
+  }
   if (isBlueprintGraph()) {
     showBlueprintGraphContextMenu(x, y, nodeKey);
     return;
   }
   const graph = buildGraphModel();
-  const node = graph.nodeMap.get(nodeKey);
+  const node = getGraphContextNode(nodeKey, graph);
   if (!node || isVirtualGraphNode(node)) {
     return;
   }
@@ -808,7 +812,7 @@ function deleteBlueprintBranch(node, graph = buildBlueprintModel()) {
 
 function runGenericGraphContextAction(actionId) {
   const graph = buildGraphModel();
-  const node = graph.nodeMap.get(state.contextGraphNodeKey || state.selectedKey);
+  const node = getGraphContextNode(state.contextGraphNodeKey || state.selectedKey, graph);
   if (!node || isVirtualGraphNode(node)) {
     hideGraphContextMenu();
     return;
@@ -821,9 +825,17 @@ function runGenericGraphContextAction(actionId) {
   hideGraphContextMenu();
 }
 
+function getGraphContextNode(key, graph) {
+  if (key === START_NODE_KEY && state.domain?.graph?.mutations?.__start__) {
+    return { key, collection: '__start__', value: state.data };
+  }
+  return graph.nodeMap.get(key);
+}
+
 function getGenericGraphMutationActions(node, graph) {
   const configured = state.domain?.graph?.mutations || state.domain?.graph?.actions || {};
-  const collectionActions = configured[node.collection] || configured[singular(node.collection)] || [];
+  const kind = node.value?.[state.domain?.graph?.nodeKind || 'kind'];
+  const collectionActions = configured[`${node.collection}:${kind}`] || configured[node.collection] || configured[singular(node.collection)] || [];
   return ensureArray(collectionActions)
     .map(normalizeGenericGraphMutation)
     .filter((action) => action.id && isGenericGraphMutationVisible(action, node, graph));
@@ -847,20 +859,7 @@ function isGenericGraphMutationVisible(action, node) {
   if (rule.collection && String(rule.collection) !== String(node.collection)) {
     return false;
   }
-  const value = getByPath(node.value, rule.path || '');
-  if (rule.empty) {
-    return value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0);
-  }
-  if (rule.notEmpty) {
-    return !(value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0));
-  }
-  if (Object.prototype.hasOwnProperty.call(rule, 'equals')) {
-    return String(value) === String(rule.equals);
-  }
-  if (Array.isArray(rule.oneOf)) {
-    return rule.oneOf.map(String).includes(String(value));
-  }
-  return true;
+  return isGenericGraphConditionMatched(rule, node.value);
 }
 
 function getGenericGraphMutationLabel(action) {
@@ -1154,6 +1153,7 @@ function renderBlueprintGraph(viewSpec = null) {
     }
     item.dataset.collection = node.collection;
     item.dataset.key = node.key;
+    item.dataset.nodeKind = String(node.value?.[state.domain?.graph?.nodeKind || 'kind'] ?? '');
     item.style.left = `${pos.x}px`;
     item.style.top = `${pos.y}px`;
     item.innerHTML = renderBlueprintNodeContent(node);
@@ -1740,6 +1740,7 @@ function drawGraphLayout(graph, layout) {
     }
     item.dataset.collection = node.collection;
     item.dataset.key = node.key;
+    item.dataset.nodeKind = String(node.value?.[state.domain?.graph?.nodeKind || 'kind'] ?? '');
     item.style.left = `${pos.x}px`;
     item.style.top = `${pos.y}px`;
     if (size?.width) {
@@ -2078,6 +2079,9 @@ function buildGraphModel() {
     const items = ensureArray(getByPath(state.data, path));
     const sourceIdKey = getGraphCollectionIdKey(rule.sourceCollection);
     for (const [sourceIndex, item] of items.entries()) {
+      if (!isGraphEdgeRuleEnabled(rule, item)) {
+        continue;
+      }
       const fromId = item?.[sourceIdKey];
       if (fromId === null || fromId === undefined || fromId === '') {
         continue;
@@ -2086,7 +2090,7 @@ function buildGraphModel() {
       const targets = collectGraphEdgeTargets(item, rule.field);
       for (const target of targets) {
         const values = ensureArray(target.value, { scalar: true })
-          .filter((value) => value !== null && value !== undefined && value !== '');
+          .filter((value) => value !== null && value !== undefined && value !== '' && !rule.emptyValues.includes(value));
         for (const value of values) {
           const to = `${rule.targetCollection}:${value}`;
           const sourceNode = nodeMap.get(from) || null;
@@ -2249,8 +2253,38 @@ function parseEdgeRule(raw) {
     labelPath: source?.labelPath || source?.labelFrom || '',
     tone: source?.tone || '',
     color: source?.color || '',
-    kind: source?.kind || ''
+    kind: source?.kind || '',
+    when: source?.when,
+    emptyValues: ensureArray(source?.emptyValues),
+    deleteFallback: source?.deleteFallback
   };
+}
+
+function isGraphEdgeRuleEnabled(rule, item) {
+  return isGenericGraphConditionMatched(rule.when, item);
+}
+
+function isGenericGraphConditionMatched(condition, item) {
+  if (!condition) {
+    return true;
+  }
+  const value = getByPath(item, condition.path || '');
+  const empty = value === undefined || value === null
+    || (typeof value === 'string' && value.trim() === '')
+    || (Array.isArray(value) && value.length === 0);
+  if (condition.empty) {
+    return empty;
+  }
+  if (condition.notEmpty) {
+    return !empty;
+  }
+  if (Object.prototype.hasOwnProperty.call(condition, 'equals')) {
+    return String(value) === String(condition.equals);
+  }
+  if (Array.isArray(condition.oneOf)) {
+    return condition.oneOf.map(String).includes(String(value));
+  }
+  return true;
 }
 
 function collectGraphEdgeTargets(root, pathText) {
@@ -2478,8 +2512,8 @@ function renderGraphNodeContent(node, graph) {
     }
     const isStart = node.virtual === 'start';
     return `
-      <div class="graph-node__pseudo-mark">${escapeHtml(isStart ? getGraphLabel('startKind', '开始') : getGraphLabel('endKind', '结束'))}</div>
-      <div class="graph-node__pseudo-text">${escapeHtml(isStart ? getGraphLabel('startText', '流程从这里开始') : getGraphLabel('endText', '流程到这里结束'))}</div>
+      <div class="graph-node__pseudo-mark">${escapeHtml(node.title || (isStart ? getGraphLabel('startKind', '开始') : getGraphLabel('endKind', '结束')))}</div>
+      <div class="graph-node__pseudo-text">${escapeHtml(node.text || (isStart ? getGraphLabel('startText', '流程从这里开始') : getGraphLabel('endText', '流程到这里结束')))}</div>
     `;
   }
 
@@ -2595,7 +2629,9 @@ function hasConfiguredGraphNodeView() {
 
 function buildConfiguredGraphNodeView(node, graph) {
   const configuredViews = state.domain?.graph?.nodeViews || {};
-  const config = configuredViews[node.collection]
+  const kind = node.value?.[state.domain?.graph?.nodeKind || 'kind'];
+  const config = configuredViews[`${node.collection}:${kind}`]
+    || configuredViews[node.collection]
     || configuredViews[singular(node.collection)]
     || state.domain?.graph?.nodeView
     || {};
@@ -2624,6 +2660,7 @@ function formatConfiguredGraphDetail(node, graph, detailSpec) {
   if (value === undefined || value === null || value === '' || (Array.isArray(value) && !value.length)) {
     return '';
   }
+  if (ensureArray(configured.emptyValues).includes(value)) return configured.emptyLabel || '';
   const label = configured.label || formatGraphDetailLabel(text, node);
   const detailValue = formatGraphDetailValue(value);
   if (isGraphEdgeField(node, text)) {
@@ -3185,7 +3222,6 @@ function layoutFixedGraph(graph, sizeOverrides = null) {
   const depth = new Map();
   const column = new Map();
   const entryKey = graph.nodeMap.has(graph.entry) ? graph.entry : graph.nodes[0]?.key;
-  const queue = entryKey ? [entryKey] : [];
   let nextFreeColumn = 1;
 
   function claimColumn(preferred) {
@@ -3195,36 +3231,53 @@ function layoutFixedGraph(graph, sizeOverrides = null) {
     return preferred;
   }
 
-  if (entryKey) {
-    depth.set(entryKey, 1);
-    column.set(entryKey, 0);
-  }
+  const entryBranches = ensureArray(state.domain.graph?.entryBranches).flatMap((branch) =>
+    ensureArray(getByPath(state.data, branch.path)).map((id) => ({ ...branch, to: `${branch.target || nodesCollection}:${id}` }))
+  ).filter((branch) => graph.nodeMap.has(branch.to));
+  const pendingBranches = entryBranches.map((branch) => ({ key: branch.to, depth: 1 }));
 
-  for (let i = 0; i < queue.length; i += 1) {
-    const key = queue[i];
-    const currentDepth = depth.get(key) || 0;
-    const currentColumn = column.get(key) || 0;
-    const transitions = displayEdges.filter((edge) => edge.from === key);
-    transitions.forEach((edge, index) => {
-      if (!displayNodeMap.has(edge.to)) {
-        return;
-      }
-      const targetColumn = index === 0 ? claimColumn(currentColumn) : nextFreeColumn++;
-      const extraDepth = getFixedExtraDepth(edge, transitions.length, nodesCollection);
-      if (!depth.has(edge.to)) {
+  // Finish each flow's entire column range before placing independently launched
+  // flows. Interleaving their breadth-first queues splits the main flow's forks.
+  function placeFlow(rootKey, rootDepth, rootColumn) {
+    if (depth.has(rootKey)) return;
+    depth.set(rootKey, rootDepth);
+    column.set(rootKey, claimColumn(rootColumn));
+    const queue = [rootKey];
+    for (let i = 0; i < queue.length; i += 1) {
+      const key = queue[i];
+      const currentDepth = depth.get(key);
+      const currentColumn = column.get(key);
+      const transitions = displayEdges.filter((edge) => edge.from === key);
+      const flowTransitions = transitions.filter((edge) => edge.kind !== 'parallel');
+      for (const edge of transitions) {
+        if (edge.kind === 'parallel') {
+          pendingBranches.push({ key: edge.to, depth: currentDepth + 1 });
+          continue;
+        }
+        if (depth.has(edge.to)) continue;
+        const targetColumn = edge === flowTransitions[0] ? currentColumn : nextFreeColumn++;
+        const extraDepth = getFixedExtraDepth(edge, flowTransitions.length, nodesCollection);
         depth.set(edge.to, currentDepth + extraDepth);
         column.set(edge.to, targetColumn);
         queue.push(edge.to);
       }
-    });
+    }
   }
 
-  let fallbackDepth = Math.max(0, ...depth.values()) + 1;
+  function placePendingBranches() {
+    for (let i = 0; i < pendingBranches.length; i += 1) {
+      const branch = pendingBranches[i];
+      placeFlow(branch.key, branch.depth, nextFreeColumn);
+    }
+    pendingBranches.length = 0;
+  }
+
+  if (entryKey) placeFlow(entryKey, 1, 0);
+  placePendingBranches();
   for (const node of graph.nodes) {
     if (!depth.has(node.key)) {
-      depth.set(node.key, fallbackDepth);
-      column.set(node.key, nextFreeColumn++);
-      fallbackDepth += 1;
+      placeFlow(node.key, Math.max(0, ...depth.values()) + 1, nextFreeColumn);
+      placePendingBranches();
     }
   }
 
@@ -3256,21 +3309,29 @@ function layoutFixedGraph(graph, sizeOverrides = null) {
       sourceNode: startNode,
       targetNode: graph.nodeMap.get(entryKey) || null
     });
+    entryBranches.forEach((branch) => displayEdges.push({
+      from: startNode.key, to: branch.to, sourceCollection: startNode.collection,
+      targetCollection: branch.target || nodesCollection, field: branch.path, kind: 'parallel',
+      color: branch.color || '', label: branch.label || '', sourceValue: null,
+      targetValue: graph.nodeMap.get(branch.to)?.value || null,
+      sourceNode: startNode, targetNode: graph.nodeMap.get(branch.to) || null
+    }));
   }
 
   const terminalNodes = graph.nodes.filter((node) => {
     if (isExplicitEndGraphNode(node, graph)) {
       return false;
     }
-    return !displayEdges.some((edge) => edge.from === node.key);
+    return !displayEdges.some((edge) => edge.from === node.key && edge.kind !== 'parallel');
   });
   terminalNodes.forEach((node) => {
+    const terminal = state.domain.graph?.terminalLabels?.[node.value?.[state.domain.graph?.nodeKind || 'kind']];
     const endNode = {
       key: createEndNodeKey(node.key),
       id: getGraphLabel('endKind', '结束'),
       collection: '__virtual__',
-      title: getGraphLabel('endKind', '结束'),
-      text: getGraphLabel('endText', '流程到这里结束'),
+      title: terminal?.title || getGraphLabel('endKind', '结束'),
+      text: terminal?.text || getGraphLabel('endText', '流程到这里结束'),
       value: null,
       virtual: 'end',
       from: node.key
@@ -3427,7 +3488,8 @@ function buildFixedHorizontalRouteHints(edges, columnMap, rowDepthMap) {
     const toColumn = columnMap.get(edge.to) ?? 0;
     const fromDepth = rowDepthMap.get(edge.from) ?? 0;
     const toDepth = rowDepthMap.get(edge.to) ?? 0;
-    const directDown = fromColumn === toColumn && toDepth > fromDepth && !isFixedFailEdge(edge);
+    const directDown = fromColumn === toColumn && toDepth > fromDepth
+      && !hasFixedColumnNodeBetween(edge, toColumn, fromDepth, toDepth, columnMap, rowDepthMap);
     if (directDown) {
       return;
     }
@@ -3499,6 +3561,7 @@ function planFixedEdgeRoutes(edges, positions, sizes, columnMap, rowDepthMap, de
   const routeCandidates = [];
   const leftCounts = new Map();
   const rightCounts = new Map();
+  const directRoutes = [];
 
   edges.forEach((edge, index) => {
     const from = positions.get(edge.from);
@@ -3515,7 +3578,10 @@ function planFixedEdgeRoutes(edges, positions, sizes, columnMap, rowDepthMap, de
     const endY = to.y;
     const fromDepth = rowDepthMap.get(edge.from) ?? 0;
     const toDepth = rowDepthMap.get(edge.to) ?? 0;
-    const directDown = fromColumn === toColumn && endY > startY && !isFixedFailEdge(edge);
+    const directPoints = [[fromColumn, startY], [toColumn, endY]];
+    const directDown = fromColumn === toColumn && endY > startY
+      && !fixedRouteHitsNodes(directPoints, edge, positions, sizes, columnMap)
+      && !fixedRouteOverlapsEdges(directPoints, edge, directRoutes);
     if (directDown) {
       plannedEdges.push({
         ...edge,
@@ -3526,6 +3592,7 @@ function planFixedEdgeRoutes(edges, positions, sizes, columnMap, rowDepthMap, de
         directDown: true,
         labelY: (startY + endY) / 2
       });
+      directRoutes.push({ edge, points: directPoints });
       return;
     }
 
@@ -3538,6 +3605,17 @@ function planFixedEdgeRoutes(edges, positions, sizes, columnMap, rowDepthMap, de
       Math.max(to.y - FIXED_EDGE_VERTICAL_GAP, to.y - (toSize?.height || GRAPH_NODE_HEIGHT) * 0.2),
       (depthTop.get(toDepth) ?? to.y) - FIXED_EDGE_VERTICAL_GAP - enterLane * FIXED_ROUTE_INTERVAL_GAP
     );
+    // A forward connection needs no outside lane when the target-centred drop is clear.
+    // Check every intermediate node: a long same-column jump is not necessarily clear.
+    const forwardPoints = [[fromColumn, startY], [fromColumn, exitY], [toColumn, exitY], [toColumn, endY]];
+    if (fromColumn !== toColumn && endY > exitY
+        && !fixedRouteHitsNodes(forwardPoints, edge, positions, sizes, columnMap)
+        && !fixedRouteOverlapsEdges(forwardPoints, edge, directRoutes)) {
+      plannedEdges.push({ ...edge, fromColumn, toColumn, startY, endY, exitY,
+        forwardCross: true, directDown: false, labelY: exitY - 6 });
+      directRoutes.push({ edge, points: forwardPoints });
+      return;
+    }
     const intervalStart = Math.min(exitY, enterY);
     const intervalEnd = Math.max(exitY, enterY);
     const anchor = getFixedEdgeLaneAnchor(fromColumn, toColumn, edge);
@@ -3605,6 +3683,49 @@ function planFixedEdgeRoutes(edges, positions, sizes, columnMap, rowDepthMap, de
   return { edges: plannedEdges, leftCounts, rightCounts };
 }
 
+function hasFixedColumnNodeBetween(edge, column, fromDepth, toDepth, columnMap, rowDepthMap) {
+  return [...columnMap].some(([key, candidateColumn]) => key !== edge.from && key !== edge.to
+    && candidateColumn === column && rowDepthMap.get(key) > fromDepth && rowDepthMap.get(key) < toDepth);
+}
+
+// Column centres are sufficient here: fixed nodes occupy one column, and horizontal
+// segments are placed in row gaps before final column widths are assigned.
+function fixedRouteHitsNodes(points, edge, positions, sizes, columnMap) {
+  const epsilon = 0.001;
+  for (const [key, position] of positions) {
+    if (key === edge.from || key === edge.to) continue;
+    const column = columnMap.get(key);
+    const top = position.y;
+    const bottom = top + (sizes.get(key)?.height || GRAPH_NODE_HEIGHT);
+    for (let index = 1; index < points.length; index += 1) {
+      const [ax, ay] = points[index - 1], [bx, by] = points[index];
+      if (ax === bx && ax === column && Math.max(ay, by) > top + epsilon && Math.min(ay, by) < bottom - epsilon) return true;
+      if (ay === by && column >= Math.min(ax, bx) && column <= Math.max(ax, bx)
+          && ay > top + epsilon && ay < bottom - epsilon) return true;
+    }
+  }
+  return false;
+}
+
+function fixedRouteOverlapsEdges(points, edge, routes) {
+  for (const route of routes) {
+    for (let a = 1; a < points.length; a += 1) {
+      for (let b = 1; b < route.points.length; b += 1) {
+        // Shared trunks at a real source or destination communicate a fork or merge.
+        if (edge.from === route.edge.from && a === 1 && b === 1) continue;
+        if (edge.to === route.edge.to && a === points.length - 1 && b === route.points.length - 1) continue;
+        const [ax, ay] = points[a - 1], [bx, by] = points[a];
+        const [cx, cy] = route.points[b - 1], [dx, dy] = route.points[b];
+        if (ax === bx && cx === dx && ax === cx
+            && Math.min(Math.max(ay, by), Math.max(cy, dy)) > Math.max(Math.min(ay, by), Math.min(cy, dy)) + 0.001) return true;
+        if (ay === by && cy === dy && ay === cy
+            && Math.min(Math.max(ax, bx), Math.max(cx, dx)) > Math.max(Math.min(ax, bx), Math.min(cx, dx)) + 0.001) return true;
+      }
+    }
+  }
+  return false;
+}
+
 function getFixedEdgeLaneAnchor(fromColumn, toColumn, edge) {
   if (toColumn > fromColumn) {
     return { side: 'right', column: toColumn };
@@ -3659,6 +3780,12 @@ function materializeFixedEdgeRoutes(plannedEdges, positions, columnX) {
         maxX: Math.max(startX, endX),
         path: `M ${startX} ${edge.startY} L ${endX} ${edge.endY}`
       };
+    }
+
+    if (edge.forwardCross) {
+      return { ...edge, startX, endX, labelX: (startX + endX) / 2,
+        labelY: edge.labelY ?? edge.exitY - 6, minX: Math.min(startX, endX), maxX: Math.max(startX, endX),
+        path: `M ${startX} ${edge.startY} L ${startX} ${edge.exitY} L ${endX} ${edge.exitY} L ${endX} ${edge.endY}` };
     }
 
     const routeX = getFixedLaneX(edge.anchor.side, edge.anchor.column, edge.laneIndex, columnX);
@@ -3944,6 +4071,55 @@ function clampGraphView() {
 function applyGraphView() {
   graphStage.style.transform = `translate(${state.view.tx}px, ${state.view.ty}px) scale(${state.view.scale})`;
   viewScaleText.textContent = `${Math.round(state.view.scale * 100)}%`;
+}
+
+function focusGraphNode(nodeKey) {
+  if (state.domain?.kind !== 'graph' || !state.data || state.resourceLoading) {
+    return false;
+  }
+  const key = String(nodeKey ?? '');
+  const findNode = () => [...graphNodes.querySelectorAll('[data-key]')]
+    .find((element) => element.dataset.key === key);
+  if (!key || !findNode()) {
+    return false;
+  }
+  const changesSelection = key !== state.selectedKey;
+  if (changesSelection && state.jsonDirty) {
+    setStatus(getAppLabel('applyJsonBeforeNavigation', '请先应用或还原 JSON 草稿，再切换节点。'), true);
+    return false;
+  }
+
+  commitFocusedInspectorControl();
+  // Committing an ID field can replace the key being requested.
+  if (!findNode()) {
+    return false;
+  }
+  state.selectedKey = key;
+  state.selectedEdge = null;
+  if (changesSelection) resetJsonDraftState();
+  renderInspector();
+  renderGraph();
+  updateActionButtons();
+  dispatchSelectionIfChanged();
+
+  const element = findNode();
+  if (!element) return false;
+  const width = element.offsetWidth || GRAPH_NODE_WIDTH;
+  const height = element.offsetHeight || GRAPH_NODE_HEIGHT;
+  const x = (parseFloat(element.style.left) || 0) + width / 2;
+  const y = (parseFloat(element.style.top) || 0) + height / 2;
+  const viewport = getViewportMetrics();
+  const visibleHeight = Math.max(1, viewport.height - FIT_VIEW_HUD_RESERVE);
+  const scale = clampViewScale(Math.min(MAX_VIEW_SCALE,
+    Math.max(1, viewport.width - FIT_VIEW_PADDING * 2) / width,
+    Math.max(1, visibleHeight - FIT_VIEW_PADDING * 2) / height));
+  state.view.scale = scale;
+  state.view.tx = viewport.width / 2 - x * scale;
+  state.view.ty = visibleHeight / 2 - y * scale;
+  state.view.resetPending = false;
+  clampGraphView();
+  applyGraphView();
+  return true;
 }
 
 function resetGraphView(render = true) {

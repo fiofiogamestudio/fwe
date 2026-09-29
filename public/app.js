@@ -2175,7 +2175,7 @@ function chainGenericGraphNode(node, action, graph) {
   const targetCollection = action.target || action.collection || graph.baseCollection;
   const targetPath = getGraphCollectionPath(targetCollection);
   const rows = ensureArray(getByPath(state.data, targetPath));
-  const item = createDefaultGraphCollectionItem(targetCollection);
+  const item = createDefaultGraphCollectionItem(targetCollection, action.defaults);
   const idKey = getGraphCollectionIdKey(targetCollection);
   const itemId = item?.[idKey];
   if (itemId === undefined || itemId === null || itemId === '') {
@@ -2206,7 +2206,7 @@ function appendGenericGraphReference(node, action) {
 
   const targetPath = getGraphCollectionPath(targetCollection);
   const rows = ensureArray(getByPath(state.data, targetPath));
-  const item = createDefaultGraphCollectionItem(targetCollection);
+  const item = createDefaultGraphCollectionItem(targetCollection, action.defaults);
   const idKey = getGraphCollectionIdKey(targetCollection);
   const itemId = item?.[idKey];
   if (itemId === undefined || itemId === null || itemId === '') {
@@ -2239,12 +2239,14 @@ function applyGenericGraphMutationClears(target, action) {
   });
 }
 
-function createDefaultGraphCollectionItem(collection) {
+function createDefaultGraphCollectionItem(collection, defaults) {
   const pathText = getGraphCollectionPath(collection);
-  const item = createDefaultItemForPath(pathText);
+  const hasTemplate = defaults && typeof defaults === 'object' && !Array.isArray(defaults);
+  const item = hasTemplate
+    ? clone(defaults) : createDefaultItemForPath(pathText);
   const idKey = getGraphCollectionIdKey(collection);
   if (item && typeof item === 'object' && !Array.isArray(item)
-    && (item[idKey] === undefined || item[idKey] === null || item[idKey] === '')) {
+    && (hasTemplate || item[idKey] === undefined || item[idKey] === null || item[idKey] === '')) {
     item[idKey] = getNextNumericId(getByPath(state.data, pathText), idKey);
   }
   return item;
@@ -2329,9 +2331,11 @@ function rewriteGraphReferences(removedCollection, removedId, fallback) {
     .forEach((rule) => {
       const sourcePath = state.domain.model?.[rule.sourceCollection] || rule.sourceCollection;
       ensureArray(getByPath(state.data, sourcePath)).forEach((item) => {
-        rewriteGraphReferenceAtPath(item, rule.field, removedId, fallback);
+        rewriteGraphReferenceAtPath(item, rule.field, removedId, rule.deleteFallback === false ? null : fallback);
       });
     });
+  ensureArray(state.domain.graph?.entryBranches).filter((branch) => (branch.target || getBaseGraphCollection()) === removedCollection)
+    .forEach((branch) => rewriteGraphReferenceAtPath(state.data, branch.path, removedId, null));
 }
 
 function rewriteGraphReferenceAtPath(root, pathText, removedId, fallback) {
@@ -2943,6 +2947,7 @@ function createViewContext(viewSpec) {
     renderDocument,
     renderTable,
     renderGraph,
+    focusGraphNode,
     renderBlueprintGraph,
     renderCollectionWorkbench,
     renderSidepanelWorkbench,
