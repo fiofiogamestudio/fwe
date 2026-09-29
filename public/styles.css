@@ -962,6 +962,18 @@ button:disabled {
   align-items: center;
 }
 
+.array-row--form-extension {
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
+
+.array-row--form-extension > .array-row__actions {
+  justify-self: end;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
 .repeater-card {
   display: grid;
   gap: 10px;
