@@ -1013,6 +1013,7 @@ function renderInspectorArrayField(field, target, context) {
     const itemTarget = { value: item };
     itemField.path = 'value';
     if (resolveFormExtensionId(itemField)) {
+      row.classList.add('array-row--form-extension');
       const itemPath = field.path ? `${field.path}[${index}]` : `[${index}]`;
       const formExtension = renderInspectorFormExtensionField(itemField, itemTarget, {
         ...context,
