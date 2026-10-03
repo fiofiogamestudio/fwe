@@ -46,8 +46,9 @@ class FakeElement extends FakeEventTarget {
     const details = new FakeElement();
     details.open = false;
     const summary = new FakeElement();
+    const summaryLabel = new FakeElement();
     const menu = new FakeElement();
-    root.querySelector = (selector) => ({ details, summary, '.menu': menu }[selector] || null);
+    root.querySelector = (selector) => ({ details, summary, '.summary-label': summaryLabel, '.menu': menu }[selector] || null);
     this.shadowRoot = root;
     return root;
   }

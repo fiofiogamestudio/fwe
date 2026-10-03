@@ -251,6 +251,23 @@ view workbench {
 
 `layout` controls the whole workbench shape. `default` controls the initial workbench state. `list` controls how one collection list is shown. `modes` controls the selected item editor.
 
+DSL collection blocks preserve native `filters` declarations and the compatible `facets` alias, including defaults and source-backed options.
+
+Catalog and dense collections may set `pageSize` (integer 1–200) and
+`thumbnail: { "src": "thumbnailUrl", "alt": "name" }`. Thumbnail properties are
+item field paths, not HTML. Native detail lists and grids share the same page,
+search, filters and selection; changing a filter/search/collection resets the page,
+and a deep link reveals the target's page. Omitting `pageSize` preserves unpaged
+behavior. Images are lazy loaded and may use a same-origin HTTP(S) URL, a root
+relative URL, or a Base64 PNG/JPEG/WebP/GIF/AVIF data URL. Remote URLs, SVG, script
+URLs and protocol-relative URLs are rejected. Invalid image references simply
+omit the thumbnail. The controls are `collectionPreviousPageButton`,
+`collectionNextPageButton` and `collectionPageInfo`.
+
+Use the native catalog for asset browsing and a custom Form field in the selected
+item's `mode.form` for a professional preview. This preserves search, filtering,
+grid/list selection and navigation instead of replacing the whole workbench.
+
 Large JSON Workbench definitions may declare ordered `collectionGroups` and assign each collection with `group`. The catalog renders a compact group/collection navigator; Workbenches without groups keep the original single-level tabs.
 
 Catalog collections can declare reusable multi-select filters. Filters combine with AND, while selected options inside one filter combine with OR. Clearing one filter intentionally shows no rows. Options may compare directly against an item field or declare a relation through an option-owned member list:
@@ -710,6 +727,17 @@ Client extension:
 
 Form context includes `app`, `domain`, `data`, `file`, `selection`, `context`, `field`, `target`, `value`, path helpers, option helpers, `setValue`, `onChange`, `renderInspector`, `navigation`, and `createResourceLink`. Set a field's `label` to `false` when the extension renders the complete field surface and does not need an outer label.
 
+A professional Form may return `{ element, dispose, canLeave }`. The optional synchronous `canLeave()` must return `true` to allow native navigation, selection, filters/layout changes, Undo/Redo, reload, and a normal redraw save. A busy guard returns `false` without opening a dialog; transaction saves with `{ refresh: false }` and an explicit Form `context.render()` remain available.
+FWE invokes `dispose()`
+once after its field leaves the DOM or its resource is replaced/cleared; use it
+to cancel animation frames and release observers/listeners. Moving a mounted
+field within the document does not dispose it. Normal node returns remain valid.
+For a multi-command save transaction that must keep its current Form mounted,
+use `await window.fwe.resources.saveCurrent({ refresh: false })`. The exact save,
+revision token, error handling and newer-edit protections are unchanged; a clean
+acknowledgement only refreshes diagnostics/actions. Omit the option for the normal
+full redraw. Reading or changing preview selection alone should not call `setValue`.
+
 For a document whose root form should occupy the main editor area instead of the side inspector, use the built-in form view's page presentation:
 
 ```json
@@ -744,7 +772,7 @@ Native saves accept trusted `domain.save.maxBodyBytes`; extensions use `readBody
 
 Hosts can require `SERVER_INTEGRATION_CONTRACT` (version 1) and its
 `requestGuard`, `extensions`, `launchRevision`, and `runtimeFingerprint`
-capabilities. `SERVER_RUNTIME_FINGERPRINT` captures FWE package/runtime source,
+capabilities. `nativeCatalog: 'media-pagination-forms-v1'` declares native thumbnail/pagination collections, disposable Forms with synchronous leave guards, and `{ refresh: false }` transaction saves. `SERVER_RUNTIME_FINGERPRINT` captures FWE package/runtime source,
 templates and public asset bytes when the module loads;
 `getServerRuntimeFingerprint()` hashes the current bytes in the same format.
 An embedding host may compare them before routing to reject live checkout

@@ -40,6 +40,7 @@ function shell(options = {}) {
     state, resourceSaveQueues: new Map(), textView: { value: state.text }, fileSelect: {},
     window: { prompt: () => options.name ?? 'new.txt' },
     domainAllowsNewFile: (domain) => domain.actions?.new !== false,
+    canLeaveEditor: () => options.leave !== false,
     confirmDiscardChanges: () => options.discard !== false,
     clone: plain, getAppLabel: (key) => key,
     formatAppLabel: (key, fallback, values) => `${key}:${JSON.stringify(values)}`,
@@ -80,6 +81,29 @@ test('unique file creation produces a dirty create-only draft without overwritin
   assert.equal(app.effects.requests[0].payload.createOnly, true);
   assert.equal(app.state.file.exists, true);
   assert.equal(app.state.file.revision, 'r1');
+});
+
+test('professional form saves can suppress a clean redraw without weakening save state', async () => {
+  const app = shell();
+  assert.equal(await app.save({ refresh: false }), true);
+  assert.equal(app.state.dirty, false);
+  assert.equal(app.state.file.revision, 'r1');
+  assert.equal(app.effects.renders, 0);
+  assert.ok(app.effects.diagnostics > 0);
+  app.state.dirty = true;
+  assert.equal(await app.save(), true);
+  assert.equal(app.effects.renders, 1, 'default saves retain the full redraw');
+});
+
+test('a busy professional form allows its transaction save but blocks a redraw save and reload', async () => {
+  const app = shell({ leave: false });
+  assert.equal(await app.save(), false);
+  assert.equal(await app.open({ skipDirtyCheck: true }), false);
+  assert.equal(await app.refresh(), false);
+  assert.equal(app.effects.requests.length, 0);
+  assert.equal(await app.save({ refresh: false }), true);
+  assert.equal(app.state.file.revision, 'r1');
+  assert.equal(app.effects.renders, 0);
 });
 
 test('API collection navigation refreshes status and keeps unsaved state visible', async () => {

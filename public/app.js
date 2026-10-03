@@ -13,6 +13,7 @@ const state = {
     collectionId: '',
     listLayout: 'detail',
     search: '',
+    page: 0,
     filterValues: {},
     mode: 'overview',
     variant: ''
@@ -86,6 +87,9 @@ const DEFAULT_LABELS = {
   noFilterOptions: '没有可用选项',
   detail: '详情',
   grid: '网格',
+  previousPage: '上一页',
+  nextPage: '下一页',
+  collectionPage: '第 {page} / {pages} 页 · {start}–{end} / {total} 项',
   overview: '概览',
   editor: '编辑器',
   preview: '预览',
@@ -108,6 +112,7 @@ const DEFAULT_LABELS = {
   newDisabled: '当前数据域不允许新建文件',
   newFileName: '新文件名',
   openOrCreateFile: '打开或新建一个文件。',
+  loadingResource: '正在加载工作台…',
   textDirectEdit: '文本文件在左侧直接编辑。',
   saveBlocked: '保存被阻止：{count} 个错误',
   saveFailed: '保存失败：{message}',
@@ -264,7 +269,7 @@ window.fweRuntime = fweRuntime;
 fweRuntime.session = fweSession;
 fweRuntime.resources = {
   current: () => currentResourceSnapshot(),
-  saveCurrent: () => saveFile({ force: true }),
+  saveCurrent: (options = {}) => saveFile({ force: true, refresh: options.refresh !== false }),
   reloadCurrent: () => openSelectedFile({ skipDirtyCheck: true }),
   refresh: () => refreshCurrentResource()
 };
@@ -340,6 +345,10 @@ const collectionLayoutTabs = document.querySelector('#collectionLayoutTabs');
 const collectionDetailButton = document.querySelector('#collectionDetailButton');
 const collectionGridButton = document.querySelector('#collectionGridButton');
 const collectionList = document.querySelector('#collectionList');
+const collectionPagination = document.querySelector('#collectionPagination');
+const collectionPreviousPageButton = document.querySelector('#collectionPreviousPageButton');
+const collectionNextPageButton = document.querySelector('#collectionNextPageButton');
+const collectionPageInfo = document.querySelector('#collectionPageInfo');
 const collectionTitle = document.querySelector('#collectionTitle');
 const collectionSubtitle = document.querySelector('#collectionSubtitle');
 const collectionModeTabs = document.querySelector('#collectionModeTabs');
@@ -430,6 +439,7 @@ addButton.addEventListener('click', () => addSelectionItem());
 duplicateButton.addEventListener('click', () => duplicateSelection());
 deleteButton.addEventListener('click', () => deleteSelection());
 selectMetaButton.addEventListener('click', () => {
+  if (!canLeaveEditor()) return;
   closeCommandMenu(surfaceMenu, surfaceMoreButton);
   state.selectedKey = '';
   state.selectedEdge = null;
@@ -538,14 +548,20 @@ textView.addEventListener('blur', () => {
   state.history.textBaseline = null;
 });
 collectionSearch.addEventListener('input', () => {
+  if (!canLeaveEditor()) { collectionSearch.value = state.workbench.search; return; }
   state.workbench.search = collectionSearch.value.trim().toLowerCase();
+  state.workbench.page = 0;
   refreshCollectionFilterResults(getActiveWorkbenchCollection());
 });
+collectionPreviousPageButton.addEventListener('click', () => changeCollectionPage(-1));
+collectionNextPageButton.addEventListener('click', () => changeCollectionPage(1));
 collectionDetailButton.addEventListener('click', () => {
+  if (!canLeaveEditor()) return;
   state.workbench.listLayout = 'detail';
   renderCollectionWorkbench();
 });
 collectionGridButton.addEventListener('click', () => {
+  if (!canLeaveEditor()) return;
   state.workbench.listLayout = 'grid';
   renderCollectionWorkbench();
 });
@@ -673,6 +689,8 @@ window.addEventListener('beforeunload', (event) => {
 
 init().catch((error) => {
   setStatus(error.message, true);
+  emptyView.textContent = error.message;
+  workspace.setAttribute('aria-busy', 'false');
 });
 
 async function init() {
@@ -1064,6 +1082,7 @@ function resetWorkbenchState(domain = state.domain) {
     collectionId: initialCollectionId,
     listLayout: defaultState.list,
     search: '',
+    page: 0,
     filterValues: {},
     mode: defaultState.mode,
     variant: ''
@@ -1074,6 +1093,7 @@ function resetWorkbenchState(domain = state.domain) {
 }
 
 async function selectDomain(domain, options = {}) {
+  if (!canLeaveEditor()) return false;
   const selectionVersion = ++state.selectionVersion;
   state.fileOpenVersion += 1;
   let ownedOpenVersion = state.fileOpenVersion;
@@ -1142,7 +1162,7 @@ async function loadFiles(domain = state.domain, selectionVersion = state.selecti
   if (state.file) {
     fileSelect.value = state.file.name;
   }
-  setStatus(`${domain.title}: ${state.files.length} ${getAppLabel('files')}`);
+  if (!state.resourceLoading || state.files.length === 0) setStatus(`${domain.title}: ${state.files.length} ${getAppLabel('files')}`);
   dispatchResourceEvent('fwe:resources-listed', { files: state.files.map((file) => ({ ...file })) });
   return true;
 }
@@ -1193,6 +1213,7 @@ function handleTabListKeydown(event) {
 }
 
 async function openSelectedFile(options = {}) {
+  if (!canLeaveEditor()) return false;
   if (!options.file && !state.file) {
     setStatus(getAppLabel('noFileSelected'), true);
     return;
@@ -1269,6 +1290,7 @@ async function openSelectedFile(options = {}) {
 }
 
 async function createFile() {
+  if (!canLeaveEditor()) return false;
   if (state.resourceLoading) return false;
   if (!domainAllowsNewFile(state.domain)) {
     setStatus(getAppLabel('newDisabled'), true);
@@ -1316,6 +1338,7 @@ async function createFile() {
 }
 
 async function saveFile(options = {}) {
+  if (options.refresh !== false && !canLeaveEditor()) return false;
   if (state.resourceLoading || !state.resourceReady) return false;
   if (!state.file) {
     setStatus(getAppLabel('noFileToSave'), true);
@@ -1405,8 +1428,10 @@ async function saveFile(options = {}) {
       renderDiagnostics();
       updateActionButtons();
     } else {
-      // A clean acknowledgement can refresh derived views; never remount newer drafts.
-      render();
+      // Professional form transactions can save before another command without
+      // destroying their own renderer. Default saves still refresh derived views.
+      if (options.refresh !== false) render();
+      else { renderDiagnostics(); updateActionButtons(); }
       setStatus(`${getAppLabel('saved')} ${getResourceDisplayName(savingFile.name)}`);
     }
     dispatchResourceEvent('fwe:resource-saved', { saved: saved ? clone(saved) : null });
@@ -1433,11 +1458,19 @@ function setResourceLoading(loading) {
   state.resourceLoading = loading;
   // Resource selectors remain usable; the old editor is inert until its read completes.
   const workspace = editorPanel.closest('main');
-  if (workspace) workspace.inert = loading || !state.resourceReady;
+  if (workspace) {
+    workspace.inert = loading || !state.resourceReady;
+    workspace.setAttribute('aria-busy', String(loading));
+  }
+  if (!state.resourceReady) {
+    emptyView.textContent = loading ? getAppLabel('loadingResource')
+      : statusText.classList.contains('is-error') ? statusText.textContent : getAppLabel('openOrCreateFile');
+  }
   updateActionButtons();
 }
 
 async function refreshCurrentResource() {
+  if (!canLeaveEditor()) return false;
   const currentName = state.file?.name || '';
   const domain = state.domain;
   const selectionVersion = state.selectionVersion;
@@ -1554,6 +1587,7 @@ function openNavigationTarget(target = {}, options = {}) {
 }
 
 async function navigateToResource(target = {}, options = {}) {
+  if (!canLeaveEditor()) return false;
   const navigation = normalizeNavigationTarget(target);
   const domain = state.app?.domains?.find((item) => item.id === (navigation.domainId || state.domain?.id));
   if (!domain) {
@@ -1635,8 +1669,12 @@ function applyWorkbenchNavigationTarget(target = {}) {
     return false;
   }
   const rows = getCollectionRows(collection);
-  if (rows.length === 0 && !navigation.itemId) {
+  const index = navigation.itemId
+    ? rows.findIndex((item, rowIndex) => String(getCollectionItemId(collection, item, rowIndex)) === navigation.itemId)
+    : (getFilteredCollectionRows(collection)[0]?.index ?? -1);
+  if (index < 0 && !navigation.itemId) {
     state.workbench.collectionId = collection.id;
+    state.workbench.page = 0;
     state.selectedKey = '';
     state.selectedEdge = null;
     const emptyModes = getCollectionModes(collection);
@@ -1646,16 +1684,18 @@ function applyWorkbenchNavigationTarget(target = {}) {
     state.workbench.variant = '';
     return true;
   }
-  const index = navigation.itemId
-    ? rows.findIndex((item, rowIndex) => String(getCollectionItemId(collection, item, rowIndex)) === navigation.itemId)
-    : (rows.length > 0 ? 0 : -1);
   if (index < 0) {
     setStatus(`Unknown navigation item: ${navigation.collectionId}/${navigation.itemId}`, true);
     return false;
   }
   state.workbench.collectionId = collection.id;
   state.selectedKey = getCollectionItemPath(collection, index);
-  revealCollectionItemInFilters(collection, rows[index], index);
+  if (navigation.itemId) {
+    revealCollectionItemInFilters(collection, rows[index], index);
+    if (state.workbench.search && !getCollectionSearchText(collection, rows[index], index).includes(state.workbench.search)) state.workbench.search = '';
+  }
+  const visibleIndex = getFilteredCollectionRows(collection).findIndex(row => row.index === index);
+  state.workbench.page = getCollectionPageSize(collection) ? Math.floor(Math.max(0, visibleIndex) / getCollectionPageSize(collection)) : 0;
   const modes = getCollectionModes(collection);
   state.workbench.mode = modes.some((mode) => mode.id === navigation.mode)
     ? navigation.mode
@@ -1817,6 +1857,7 @@ function pushHistorySnapshot(snapshot) {
 }
 
 function undoAction() {
+  if (!canLeaveEditor()) return false;
   if (state.resourceLoading) return;
   if (!state.history.undo.length) {
     return;
@@ -1828,6 +1869,7 @@ function undoAction() {
 }
 
 function redoAction() {
+  if (!canLeaveEditor()) return false;
   if (state.resourceLoading) return;
   if (!state.history.redo.length) {
     return;
@@ -1852,7 +1894,12 @@ function restoreHistorySnapshot(snapshot, label) {
   updateActionButtons();
 }
 
+function canLeaveEditor() {
+  return typeof canLeaveInspectorForms !== 'function' || canLeaveInspectorForms();
+}
+
 function confirmDiscardChanges() {
+  if (!canLeaveEditor()) return false;
   if (!hasUnsavedChanges()) {
     return true;
   }
@@ -1983,6 +2030,7 @@ function isActionVisible(action) {
 }
 
 function addSelectionItem() {
+  if (!canLeaveEditor()) return false;
   if (!state.data || state.domain?.kind === 'text') {
     return;
   }
@@ -2003,6 +2051,7 @@ function addSelectionItem() {
 }
 
 function duplicateSelection() {
+  if (!canLeaveEditor()) return false;
   const info = getSelectedPathInfo();
   if (!info?.exists) {
     return;
@@ -2034,6 +2083,7 @@ function duplicateSelection() {
 }
 
 function deleteSelection() {
+  if (!canLeaveEditor()) return false;
   if (state.domain?.kind === 'graph' && !isBlueprintGraph() && !isDialogGraphProfile() && deleteGraphSelectionItem()) {
     return;
   }
@@ -2895,6 +2945,7 @@ function createViewContext(viewSpec) {
     pushHistory,
     markDirty: markDirtyAndRender,
     selectPath(pathText) {
+      if (!canLeaveEditor()) return false;
       state.selectedKey = pathText || '';
       state.selectedEdge = null;
       resetJsonDraftState();
@@ -3063,6 +3114,7 @@ function renderTable() {
       .map((column) => `<td>${escapeHtml(formatCollectionColumnValue(column, row))}</td>`)
       .join('');
     tr.addEventListener('click', () => {
+      if (!canLeaveEditor()) return;
       state.selectedKey = rowPath;
       state.selectedEdge = null;
       resetJsonDraftState();
@@ -3361,6 +3413,67 @@ function getFilteredCollectionRows(collection) {
     : rows;
 }
 
+function getCollectionPageSize(collection) {
+  return Number.isSafeInteger(collection?.pageSize) && collection.pageSize > 0 && collection.pageSize <= 200 ? collection.pageSize : 0;
+}
+
+function getPagedCollectionRows(collection, rows = getFilteredCollectionRows(collection)) {
+  const size = getCollectionPageSize(collection);
+  if (!size) return rows;
+  const pages = Math.ceil(rows.length / size);
+  state.workbench.page = Math.min(Math.max(0, Number.isSafeInteger(state.workbench.page) ? state.workbench.page : 0), Math.max(0, pages - 1));
+  return rows.slice(state.workbench.page * size, (state.workbench.page + 1) * size);
+}
+
+function renderCollectionPagination(collection, rows) {
+  const size = getCollectionPageSize(collection), pageRows = getPagedCollectionRows(collection, rows), page = state.workbench.page || 0;
+  collectionPagination.hidden = !size;
+  collectionPreviousPageButton.textContent = getAppLabel('previousPage');
+  collectionNextPageButton.textContent = getAppLabel('nextPage');
+  collectionPreviousPageButton.disabled = !size || page === 0;
+  collectionNextPageButton.disabled = !size || (page + 1) * size >= rows.length;
+  collectionPageInfo.textContent = formatAppLabel('collectionPage', '第 {page} / {pages} 页 · {start}–{end} / {total} 项', {
+    page: rows.length ? page + 1 : 0, pages: size ? Math.ceil(rows.length / size) : 1,
+    start: rows.length ? page * size + 1 : 0, end: page * size + pageRows.length, total: rows.length
+  });
+}
+
+function changeCollectionPage(delta) {
+  if (!canLeaveEditor()) return false;
+  const collection = getActiveWorkbenchCollection();
+  if (!getCollectionPageSize(collection)) return;
+  state.workbench.page = (state.workbench.page || 0) + delta;
+  const rows = getPagedCollectionRows(collection);
+  reconcileCollectionSelection(collection, rows);
+  renderCollectionWorkbench();
+  updateActionButtons();
+  dispatchSelectionIfChanged();
+}
+
+function safeCollectionThumbnailUrl(value) {
+  if (typeof value !== 'string' || !value || value.length > 8 * 1024 * 1024 || /[\x00-\x20\\]/.test(value)) return '';
+  if (/^data:image\/(?:png|jpeg|webp|gif|avif);base64,(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/i.test(value)) {
+    return value.substring(value.indexOf(',') + 1).length ? value : '';
+  }
+  if (!/^\/(?!\/)|^https?:\/\//i.test(value)) return '';
+  try {
+    const url = new URL(value, window.location.href);
+    return ['http:', 'https:'].includes(url.protocol) && url.origin === window.location.origin && !url.username && !url.password ? url.href : '';
+  } catch { return ''; }
+}
+
+function createCollectionThumbnail(collection, item, index, presentation) {
+  const config = collection.thumbnail;
+  if (!config || typeof config.src !== 'string') return null;
+  const src = safeCollectionThumbnailUrl(getByPath(item, config.src));
+  if (!src) return null;
+  const image = document.createElement('img');
+  image.className = `collection-thumbnail collection-thumbnail--${presentation}`;
+  image.alt = String(config.alt ? getByPath(item, config.alt) ?? '' : getCollectionItemTitle(collection, item, index));
+  image.loading = 'lazy'; image.decoding = 'async'; image.referrerPolicy = 'no-referrer'; image.src = src;
+  return image;
+}
+
 function getAppliedCollectionFilters(collection) {
   return fweRuntime.collectionFilters.normalize(collection).map((filter) => {
     const options = fweRuntime.collectionFilters.resolveOptions(filter, state.data || {});
@@ -3414,7 +3527,7 @@ function reconcileCollectionSelection(collection, rows = getFilteredCollectionRo
 }
 
 function findSelectedCollectionItem(collection) {
-  const rows = getFilteredCollectionRows(collection);
+  const rows = getPagedCollectionRows(collection);
   const pathText = state.selectedKey || '';
   const selected = rows.find(({ index }) => getCollectionItemPath(collection, index) === pathText);
   if (selected) {
@@ -3427,6 +3540,7 @@ function findSelectedCollectionItem(collection) {
 }
 
 function selectCollectionItem(collection, index) {
+  if (!canLeaveEditor()) return false;
   state.selectedKey = getCollectionItemPath(collection, index);
   state.selectedEdge = null;
   state.workbench.mode = getCollectionDefaultMode(collection);
@@ -3461,8 +3575,9 @@ function renderCollectionWorkbench() {
 function refreshCollectionFilterResults(collection) {
   if (!collection) return;
   const rows = getFilteredCollectionRows(collection);
-  reconcileCollectionSelection(collection, rows);
-  renderCollectionList(collection, rows);
+  reconcileCollectionSelection(collection, getPagedCollectionRows(collection, rows));
+  renderCollectionPagination(collection, rows);
+  renderCollectionList(collection, getPagedCollectionRows(collection, rows));
   renderCollectionEditor(collection);
   updateActionButtons();
   dispatchSelectionIfChanged();
@@ -3521,8 +3636,10 @@ function renderCollectionTabs(activeCollection) {
 }
 
 function activateWorkbenchCollection(collection) {
+  if (!canLeaveEditor()) return false;
   if (!collection || state.workbench.collectionId === collection.id) return;
   state.workbench.collectionId = collection.id;
+  state.workbench.page = 0;
   state.workbench.mode = getCollectionDefaultMode(collection);
   state.workbench.variant = '';
   const rows = getCollectionRows(collection);
@@ -3541,8 +3658,9 @@ function renderCollectionBrowser(collection) {
   collectionLayoutTabs.hidden = listLayouts && !ensureArray(listLayouts, { scalar: true }).includes('grid');
   renderCollectionFilters(collection);
   const rows = getFilteredCollectionRows(collection);
-  reconcileCollectionSelection(collection, rows);
-  renderCollectionList(collection, rows);
+  reconcileCollectionSelection(collection, getPagedCollectionRows(collection, rows));
+  renderCollectionPagination(collection, rows);
+  renderCollectionList(collection, getPagedCollectionRows(collection, rows));
 }
 
 function renderCollectionFilters(collection) {
@@ -3568,14 +3686,16 @@ function renderCollectionFilters(collection) {
     control.dataset.filterId = filter.id;
     control.setAttribute('aria-label', filter.label);
     control.addEventListener('change', (event) => {
+      if (!canLeaveEditor()) { renderCollectionFilters(collection); return; }
       getCollectionFilterValueState(collection)[filter.id] = event.detail?.values || [];
+      state.workbench.page = 0;
       refreshCollectionFilterResults(collection);
     });
     collectionFilters.append(control);
   });
 }
 
-function renderCollectionList(collection, rows = getFilteredCollectionRows(collection)) {
+function renderCollectionList(collection, rows = getPagedCollectionRows(collection)) {
   collectionList.innerHTML = '';
   if (!rows.length) {
     collectionList.innerHTML = `<div class="collection-empty">${escapeHtml(getAppLabel('noItems'))}</div>`;
@@ -3593,6 +3713,8 @@ function renderCollectionList(collection, rows = getFilteredCollectionRows(colle
       <span class="collection-item__title">${escapeHtml(getCollectionItemTitle(collection, item, index))}</span>
       <span class="collection-item__meta">${escapeHtml(getCollectionItemSubtitle(collection, item) || String(getCollectionItemId(collection, item, index)))}</span>
     `;
+    const thumbnail = createCollectionThumbnail(collection, item, index, 'list');
+    if (thumbnail) { button.classList.add('collection-item--thumbnail'); button.prepend(thumbnail); }
     button.addEventListener('click', () => selectCollectionItem(collection, index));
     collectionList.append(button);
   });
@@ -3655,6 +3777,7 @@ function renderCollectionModeTabs(collection, item) {
       if (state.workbench.mode === mode.id) {
         return;
       }
+      if (!canLeaveEditor()) return;
       state.workbench.mode = mode.id;
       resetJsonDraftState();
       renderCollectionEditor(collection);
@@ -3702,6 +3825,7 @@ function renderCollectionVariantTabs(collection, item) {
     button.setAttribute('aria-selected', String(entry.id === state.workbench.variant));
     button.tabIndex = entry.id === state.workbench.variant ? 0 : -1;
     button.addEventListener('click', () => {
+      if (!canLeaveEditor()) return;
       state.workbench.variant = entry.id;
       resetJsonDraftState();
       renderCollectionEditor(collection);
@@ -3785,12 +3909,14 @@ function renderCollectionGrid(collection) {
   });
   const grid = document.createElement('div');
   grid.className = 'collection-grid';
-  getFilteredCollectionRows(collection).forEach(({ item, index }) => {
+  getPagedCollectionRows(collection).forEach(({ item, index }) => {
     const card = document.createElement('button');
     card.type = 'button';
     card.className = `collection-grid-card${state.selectedKey === getCollectionItemPath(collection, index) ? ' is-active' : ''}`;
     card.dataset.collectionId = collection.id;
     card.dataset.itemId = String(getCollectionItemId(collection, item, index));
+    const thumbnail = createCollectionThumbnail(collection, item, index, 'grid');
+    if (thumbnail) card.append(thumbnail);
     const title = document.createElement('span');
     title.className = 'collection-grid-card__title';
     title.textContent = getCollectionItemTitle(collection, item, index);
@@ -3890,6 +4016,7 @@ function renderSidepanelWorkbench() {
 }
 
 function switchSidepanelMode(mode) {
+  if (!canLeaveEditor()) return false;
   if (mode === state.inspectorMode) {
     return;
   }
@@ -3932,6 +4059,7 @@ function renderSidepanelTabs(activeTab) {
       if (state.workbench.collectionId === tab.id) {
         return;
       }
+      if (!canLeaveEditor()) return;
       state.workbench.collectionId = tab.id;
       state.workbench.listLayout = tab.type === 'preview' ? 'preview' : 'detail';
       state.workbench.mode = 'overview';
@@ -3995,6 +4123,7 @@ function renderSidepanelList(collection) {
       <span class="sidepanel-file-button__meta">${escapeHtml(getCollectionItemSubtitle(collection, item) || String(getCollectionItemId(collection, item, index)))}</span>
     `;
     button.addEventListener('click', () => {
+      if (!canLeaveEditor()) return;
       state.selectedKey = pathText;
       state.selectedEdge = null;
       state.inspectorMode = 'form';
@@ -4165,6 +4294,7 @@ function renderSidepanelPreview(preview) {
       </span>
     `;
     row.addEventListener('click', () => {
+      if (!canLeaveEditor()) return;
       state.selectedKey = `${selected.path}.${routePath}[${index}]`;
       resetJsonDraftState();
       renderInspector();
@@ -4253,6 +4383,7 @@ function renderSidepanelDiagnostics() {
     row.textContent = item.message;
     row.title = item.path || '';
     row.addEventListener('click', () => {
+      if (!canLeaveEditor()) return;
       if (item.path) {
         state.selectedKey = item.path;
         resetJsonDraftState();
@@ -4283,6 +4414,7 @@ function renderDiagnostics(existingDiagnostics = null) {
     if (item.path) {
       div.title = item.path;
       div.addEventListener('click', () => {
+        if (!canLeaveEditor()) return;
         state.selectedKey = item.path;
         state.selectedEdge = null;
         resetJsonDraftState();
@@ -4591,6 +4723,7 @@ function validateDanglingEdges(diagnostics) {
 }
 
 function selectJsonPath(label, value) {
+  if (!canLeaveEditor()) return false;
   state.selectedKey = label;
   state.selectedEdge = null;
   resetJsonDraftState();

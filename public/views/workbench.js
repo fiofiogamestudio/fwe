@@ -171,6 +171,10 @@
       const issues = Array.isArray(collections) && collections.length
         ? []
         : ['workbench view needs at least one collection.'];
+      for (const collection of Array.isArray(collections) ? collections : []) {
+        if (collection.pageSize !== undefined && (!Number.isSafeInteger(collection.pageSize) || collection.pageSize < 1 || collection.pageSize > 200)) issues.push(`collection "${collection.id}" pageSize must be an integer between 1 and 200.`);
+        if (collection.thumbnail !== undefined && (!collection.thumbnail || typeof collection.thumbnail !== 'object' || Array.isArray(collection.thumbnail) || typeof collection.thumbnail.src !== 'string' || !collection.thumbnail.src.trim() || (collection.thumbnail.alt !== undefined && typeof collection.thumbnail.alt !== 'string'))) issues.push(`collection "${collection.id}" thumbnail needs a src field path and an optional alt field path.`);
+      }
       if (!renderer || typeof renderer.render !== 'function') {
         issues.push(`workbench layout "${layoutInfo.id}" is not registered.`);
       } else if (typeof renderer.validateLayout === 'function') {

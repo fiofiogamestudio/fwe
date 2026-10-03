@@ -97,7 +97,7 @@ test('resource extensions receive lifecycle metadata and can invoke host resourc
   const openSource = readFunctionSource('openSelectedFile');
   const saveSource = readFunctionSource('saveFile');
   assert.match(appSource, /fweRuntime\.resources = \{/);
-  assert.match(appSource, /saveCurrent: \(\) => saveFile\(\{ force: true \}\)/);
+  assert.match(appSource, /saveCurrent: \(options = \{\}\) => saveFile\(\{ force: true, refresh: options\.refresh !== false \}\)/);
   assert.match(openSource, /result\.meta !== undefined/);
   assert.match(openSource, /dispatchResourceEvent\('fwe:resource-opened'\)/);
   assert.match(saveSource, /saved\?\.meta !== undefined/);

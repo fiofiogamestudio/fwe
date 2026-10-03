@@ -1,6 +1,52 @@
 // Inspector form and JSON-mode helpers.
 // Loaded before app.js; these functions intentionally live in the browser global scope.
 
+// Professional field renderers may own animation frames, observers or listeners.
+// The framework releases them when their field is removed or its resource changes.
+const inspectorFormDisposables = new Map();
+let inspectorFormDisposalObserver;
+function trackInspectorFormDisposal(wrapper, dispose, canLeave) {
+  if (typeof dispose !== 'function' && typeof canLeave !== 'function') return;
+  const identity = { domainId: state.domain?.id, fileName: state.file?.name };
+  inspectorFormDisposables.set(wrapper, { dispose, canLeave, identity, connected: wrapper.isConnected });
+  if (!inspectorFormDisposalObserver && typeof MutationObserver === 'function') {
+    inspectorFormDisposalObserver = new MutationObserver(records => {
+      const removed = records.flatMap(record => Array.from(record.removedNodes));
+      for (const [host, record] of inspectorFormDisposables) {
+        if (host.isConnected) record.connected = true;
+        else if (record.connected || removed.some(node => node === host || node.contains?.(host))) disposeInspectorForm(host);
+      }
+    });
+    inspectorFormDisposalObserver.observe(document.documentElement, { childList: true, subtree: true });
+    window.addEventListener('fwe:resource-opened', () => {
+      for (const [host, record] of inspectorFormDisposables) if (record.identity.domainId !== state.domain?.id || record.identity.fileName !== state.file?.name) disposeInspectorForm(host);
+    });
+    window.addEventListener('fwe:resource-cleared', disposeAllInspectorForms);
+    window.addEventListener('pagehide', disposeAllInspectorForms);
+  }
+}
+
+function disposeInspectorForm(host) {
+  const record = inspectorFormDisposables.get(host);
+  if (!record) return;
+  inspectorFormDisposables.delete(host);
+  try { record.dispose?.(); } catch (error) { console.error('FWE form disposal failed:', error); }
+}
+
+// Synchronous transaction guard: a pending Promise cannot authorize leaving.
+function canLeaveInspectorForms() {
+  for (const [host, record] of inspectorFormDisposables) {
+    if (!host.isConnected || record.identity.domainId !== state.domain?.id || record.identity.fileName !== state.file?.name || typeof record.canLeave !== 'function') continue;
+    try { if (record.canLeave() !== true) return false; }
+    catch (error) { console.error('FWE form leave guard failed:', error); return false; }
+  }
+  return true;
+}
+
+function disposeAllInspectorForms() {
+  for (const host of inspectorFormDisposables.keys()) disposeInspectorForm(host);
+}
+
 function renderInspector(extra = {}) {
   if (!state.data || state.domain?.kind === 'text') {
     inspectorTitle.textContent = state.file?.name || getAppLabel('inspector');
@@ -53,6 +99,7 @@ function renderInspectorMode() {
 }
 
 function switchInspectorMode(mode) {
+  if (!canLeaveEditor()) return false;
   if (mode === state.inspectorMode) {
     return;
   }
@@ -898,6 +945,7 @@ function renderInspectorFormExtensionField(field, target, context, hooks = {}) {
   try {
     const rendered = formExtension.render(formContext, field, formContext.value, formContext.setValue);
     appendFormExtensionResult(wrapper, rendered);
+    trackInspectorFormDisposal(wrapper, rendered?.dispose, typeof rendered?.canLeave === 'function' ? rendered.canLeave.bind(rendered) : undefined);
   } catch (error) {
     const errorBox = document.createElement('div');
     errorBox.className = 'form-extension-error';
@@ -963,6 +1011,7 @@ function createInspectorFormExtensionContext(field, target, context, formExtensi
       return fweRuntime.ui.createResourceLink(options);
     },
     selectPath(pathText) {
+      if (!canLeaveEditor()) return false;
       state.selectedKey = pathText || '';
       state.selectedEdge = null;
       resetJsonDraftState();
@@ -1033,6 +1082,7 @@ function renderInspectorArrayField(field, target, context) {
     const itemTarget = { value: item };
     itemField.path = 'value';
     if (resolveFormExtensionId(itemField)) {
+      row.classList.add('array-row--form-extension');
       const itemPath = field.path ? `${field.path}[${index}]` : `[${index}]`;
       const formExtension = renderInspectorFormExtensionField(itemField, itemTarget, {
         ...context,

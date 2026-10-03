@@ -97,6 +97,7 @@
         this._connected = false;
         this._onDocumentPointerDown = this._onDocumentPointerDown.bind(this);
         this._onOtherControlOpened = this._onOtherControlOpened.bind(this);
+        this._positionMenu = this._positionMenu.bind(this);
 
         const root = this.attachShadow({ mode: 'open' });
         root.innerHTML = `
@@ -128,6 +129,12 @@
               white-space: nowrap;
             }
             summary::-webkit-details-marker { display: none; }
+            .summary-label {
+              flex: 1;
+              min-inline-size: 0;
+              overflow: hidden;
+              text-overflow: ellipsis;
+            }
             summary::after {
               content: '';
               inline-size: 0;
@@ -212,12 +219,13 @@
             }
           </style>
           <details>
-            <summary></summary>
+            <summary><span class="summary-label"></span></summary>
             <div class="menu"></div>
           </details>
         `;
         this._details = root.querySelector('details');
         this._summary = root.querySelector('summary');
+        this._summaryLabel = root.querySelector('.summary-label');
         this._menu = root.querySelector('.menu');
         this._details.addEventListener('toggle', () => this._handleToggle());
         this._summary.addEventListener('click', (event) => {
@@ -237,6 +245,7 @@
         this._connected = true;
         window.document.addEventListener('pointerdown', this._onDocumentPointerDown, true);
         window.addEventListener(MULTI_SELECT_OPEN_EVENT, this._onOtherControlOpened);
+        window.addEventListener('resize', this._positionMenu);
       }
 
       disconnectedCallback() {
@@ -244,6 +253,7 @@
         this._connected = false;
         window.document.removeEventListener('pointerdown', this._onDocumentPointerDown, true);
         window.removeEventListener(MULTI_SELECT_OPEN_EVENT, this._onOtherControlOpened);
+        window.removeEventListener('resize', this._positionMenu);
       }
 
       configure(options = {}) {
@@ -336,7 +346,7 @@
           selectedItems: selectedItems.map((item) => ({ ...item })),
           selectedValues: selectedItems.map((item) => item.value)
         };
-        this._summary.textContent = this._formatSummary(summaryContext);
+        this._summaryLabel.textContent = this._formatSummary(summaryContext);
         this._summary.title = selectedItems.map((item) => item.label).join(', ') || this._config.placeholder;
         this._summary.setAttribute('aria-label', this._config.placeholder);
         this._summary.setAttribute('aria-haspopup', 'true');
@@ -425,8 +435,28 @@
         }));
       }
 
+      _positionMenu() {
+        if (!this.open) return;
+        this._menu.style.translate = '';
+        this._menu.style.maxInlineSize = '';
+        let left = 0, right = window.document.documentElement.clientWidth;
+        // An editor pane can clip a menu even when it fits in the viewport.
+        // Keep the existing dropdown inside the intersection of those bounds.
+        for (let parent = this.parentElement; parent; parent = parent.parentElement || parent.getRootNode()?.host) {
+          if (!/^(hidden|clip|auto|scroll)$/.test(window.getComputedStyle(parent).overflowX)) continue;
+          const bounds = parent.getBoundingClientRect();
+          left = Math.max(left, bounds.left + parent.clientLeft);
+          right = Math.min(right, bounds.left + parent.clientLeft + parent.clientWidth);
+        }
+        this._menu.style.maxInlineSize = Math.max(0, right - left) + 'px';
+        const bounds = this._menu.getBoundingClientRect();
+        const offset = Math.max(left, Math.min(bounds.left, right - bounds.width)) - bounds.left;
+        this._menu.style.translate = offset + 'px 0';
+      }
+
       _handleToggle() {
         if (!this.open) return;
+        this._positionMenu();
         if (this.disabled) {
           this.close();
           return;

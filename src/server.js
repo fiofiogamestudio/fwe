@@ -26,6 +26,7 @@ const SERVER_INTEGRATION_CONTRACT = Object.freeze({
   launchRevision: LAUNCH_REVISION_VERSION,
   runtimeFingerprint: 'fwe-runtime-v1',
   configuredSurfaces: 'native-inspector-v1',
+  nativeCatalog: 'media-pagination-forms-v1',
   boundedRequestBody: 'bytes-v1',
   surfaceCanvas: 'device-resolution-v1'
 });

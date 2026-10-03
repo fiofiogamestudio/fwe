@@ -89,7 +89,7 @@
 
     <main class="workspace">
       <section id="editorPanel" class="editor-panel">
-        <div id="emptyView" class="empty">打开或新建一个文件。</div>
+        <div id="emptyView" class="empty">正在加载工作台…</div>
         <div id="documentView" class="editor-view hidden">
           <div id="documentTree" class="json-tree"></div>
         </div>
@@ -112,6 +112,13 @@
               </div>
             </div>
             <div id="collectionList" class="collection-list"></div>
+            <div id="collectionPagination" class="collection-pagination" hidden>
+              <div class="collection-pagination__buttons">
+                <button id="collectionPreviousPageButton" type="button">上一页</button>
+                <button id="collectionNextPageButton" type="button">下一页</button>
+              </div>
+              <span id="collectionPageInfo" role="status" aria-live="polite"></span>
+            </div>
           </aside>
           <section class="collection-editor">
             <div class="collection-editor__header">
