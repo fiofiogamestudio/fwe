@@ -3733,6 +3733,13 @@ function renderCollectionEditor(collection) {
     collectionSubtitle.textContent = '';
     collectionModeTabs.innerHTML = '';
     collectionVariantTabs.innerHTML = '';
+    const rootModes = getCollectionModes(collection).filter((mode) => mode.target === 'root');
+    if (rootModes.length) {
+      if (!rootModes.some((mode) => mode.id === state.workbench.mode)) state.workbench.mode = rootModes[0].id;
+      renderCollectionModeTabs(collection, null);
+      renderCollectionModeBody(collection, null, '');
+      return;
+    }
     collectionEditorBody.innerHTML = `<div class="empty">${escapeHtml(getAppLabel('noItemSelected'))}</div>`;
     return;
   }
@@ -3776,6 +3783,7 @@ function renderCollectionModeTabs(collection, item) {
     button.type = 'button';
     button.textContent = mode.label || mode.id;
     button.className = mode.id === state.workbench.mode ? 'is-active' : '';
+    button.disabled = item == null && mode.target !== 'root';
     button.setAttribute('role', 'tab');
     button.setAttribute('aria-selected', String(mode.id === state.workbench.mode));
     button.tabIndex = mode.id === state.workbench.mode ? 0 : -1;
@@ -3875,6 +3883,7 @@ function resolveCollectionModeForm(collection, mode, context) {
 }
 
 function resolveCollectionModeTarget(collection, item, itemPath, mode) {
+  if (mode.target === 'root') return { path: '', target: state.data };
   if (mode.target === 'variant') {
     const entry = getCollectionVariantEntries(collection, item).find((variant) => variant.id === state.workbench.variant);
     const path = entry ? `${itemPath}.${entry.path}` : itemPath;

@@ -236,6 +236,8 @@ Graph extensions can call `ctx.focusGraphNode(key)` (for example, `nodes:1` or `
 
 Use `workbench` when one domain needs multiple collections, shared search, item forms, previews, references, or a custom workspace-like composition.
 
+A collection mode can set `target: "root"` to edit the document itself through a form or JSON view. Root modes remain available when the collection is empty or no item is selected; item-specific modes stay disabled until an item exists. Saving a root mode updates the document root, not a field on the selected item.
+
 Catalog layout:
 
 ```fwe
