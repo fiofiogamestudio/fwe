@@ -6,6 +6,7 @@ const vm = require('node:vm');
 
 const app = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8');
 const inspector = fs.readFileSync(path.join(__dirname, '../public/inspector.js'), 'utf8');
+const graph = fs.readFileSync(path.join(__dirname, '../public/graph.js'), 'utf8');
 function fn(source, name) {
   const start = source.search(new RegExp(`^(?:async )?function ${name}\\(`, 'm'));
   assert.ok(start >= 0, name); const rest = source.slice(start), next = rest.search(/\n(?:async )?function /);
@@ -56,4 +57,42 @@ test('busy form restores native search input and blocks detail/grid changes', ()
   }
   for (const listener of Object.values(listeners)) listener();
   assert.equal(c.state.workbench.search, 'old'); assert.equal(c.collectionSearch.value, 'old'); assert.equal(c.state.workbench.listLayout, undefined);
+});
+
+test('busy forms block graph edges, drag and context menus before selection or draft changes', () => {
+  const c = context(), host = { isConnected: true };
+  c.trackInspectorFormDisposal(host, undefined, () => false);
+  const names = ['selectGraphEdge', 'startGraphDrag', 'showGraphContextMenu', 'showBlueprintGraphContextMenu', 'showStateMachineEdgeContextMenu', 'runGraphContextAction'];
+  vm.runInContext(names.map(name => fn(graph, name)).join('\n'), c);
+  const before = JSON.stringify(c.state);
+  for (const name of names) assert.equal(c[name](), false, name);
+  assert.equal(JSON.stringify(c.state), before);
+  assert.deepEqual(c.effects, { renders: 0, resets: 0 });
+  c.disposeInspectorForm(host);
+  c.renderInspector = c.renderGraph = c.updateActionButtons = () => {};
+  const edge = { from: 'one', to: 'two' };
+  c.selectGraphEdge(edge, 'edge:one-two');
+  assert.equal(c.state.selectedEdge, edge);
+  assert.equal(c.state.selectedKey, 'edge:one-two');
+  assert.equal(c.effects.resets, 1);
+});
+
+test('clicking graph background preserves a busy form and clears selection after it can leave', () => {
+  const c = context(), host = { isConnected: true };
+  let busy = true, click;
+  c.trackInspectorFormDisposal(host, undefined, () => !busy);
+  c.graphViewport = { addEventListener(_event, callback) { click = callback; } };
+  c.renderInspector = c.renderGraph = () => { c.effects.renders++; };
+  c.updateActionButtons = c.hideGraphContextMenu = () => {};
+  const start = app.indexOf("graphViewport.addEventListener('click',"), end = app.indexOf('\n});', start);
+  assert.ok(start >= 0 && end > start);
+  vm.runInContext(app.slice(start, end + 4), c);
+  const before = JSON.stringify(c.state);
+  click({ target: { closest() { return null; } } });
+  assert.equal(JSON.stringify(c.state), before);
+  assert.deepEqual(c.effects, { renders: 0, resets: 0 });
+  busy = false;
+  click({ target: { closest() { return null; } } });
+  assert.equal(c.state.selectedKey, '');
+  assert.deepEqual(c.effects, { renders: 2, resets: 1 });
 });

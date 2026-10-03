@@ -9,6 +9,35 @@ const inspectorSource = fs.readFileSync(path.resolve(__dirname, '../public/inspe
 const graphSource = fs.readFileSync(path.resolve(__dirname, '../public/graph.js'), 'utf8');
 const indexSource = fs.readFileSync(path.resolve(__dirname, '../public/index.html'), 'utf8');
 
+test('graph insertion templates allocate fresh ids, preserve the original target and isolate template data', () => {
+  const sourceNode = { key: 'nodes:1', value: { id: 1, next: 9 } };
+  const state = { data: { nodes: [sourceNode.value, { id: 9 }] }, selectedKey: sourceNode.key, selectedEdge: null };
+  const effects = [];
+  const context = {
+    state, getGraphCollectionPath: (collection) => collection, getGraphCollectionIdKey: () => 'id',
+    getByPath: (object, key) => object[key], setByPath: (object, key, value) => { object[key] = value; },
+    ensureArray: (value) => Array.isArray(value) ? value : [], clone: plain,
+    getNextNumericId: (rows, idKey) => Math.max(0, ...rows.map((row) => Number(row[idKey]) || 0)) + 1,
+    createDefaultItemForPath: () => ({ id: 10, text: 'normal default', calls: [] }),
+    pushHistory: (label) => effects.push(label), formatAppLabel: (_, fallback) => fallback,
+    applyGenericGraphMutationClears: () => {}, markDirtyAndRender: () => effects.push('render'),
+    isGraphEmptyMutationValue: (value) => value === undefined || value === null || value === 0
+  };
+  vm.createContext(context);
+  vm.runInContext(['createDefaultGraphCollectionItem', 'chainGenericGraphNode'].map((name) => readNamedFunctionSource(appSource, name, 'app.js')).join('\n'), context);
+  const template = { id: 1, kind: 'bubble', sceneSpeech: [{ actorId: 'player', text: '' }] };
+  const beforeTemplate = plain(template);
+  assert.equal(context.chainGenericGraphNode(sourceNode, { type: 'chain', defaults: template }, { baseCollection: 'nodes' }), true);
+  const added = state.data.nodes.at(-1);
+  assert.deepEqual(plain(added), { id: 10, kind: 'bubble', sceneSpeech: [{ actorId: 'player', text: '' }], next: 9 });
+  assert.equal(sourceNode.value.next, 10);
+  assert.equal(state.selectedKey, 'nodes:10');
+  added.sceneSpeech[0].text = 'changed';
+  assert.deepEqual(template, beforeTemplate);
+  assert.equal(effects.length, 2);
+  assert.deepEqual(plain(context.createDefaultGraphCollectionItem('nodes')), { id: 10, text: 'normal default', calls: [] });
+});
+
 test('domain actions.new=false disables both the visible command and createFile path', () => {
   const domainAllowsNewFile = loadFunction('domainAllowsNewFile');
   assert.equal(domainAllowsNewFile(null), false);

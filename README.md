@@ -200,6 +200,38 @@ For built-in JSON sources, a root-level optional string `alias` is displayed aft
 
 JSON graph domains may use `nodeViews` to give each node collection its own badge, title, body, and labeled detail rows. A grid graph may also declare `derivedEdges.type: "orthogonal-grid"`; FWE then connects Manhattan-adjacent positions unless an explicit configured link list is present. These options change presentation and edge discovery only; node data remains owned by the host domain.
 
+Fixed JSON graphs can distinguish sequential flow from independently launched branches:
+
+```json
+{
+  "graph": {
+    "nodes": "nodes",
+    "entry": "meta.entry",
+    "nodeKind": "kind",
+    "entryBranches": [{ "path": "meta.backgroundStarts", "target": "nodes", "label": "Background" }],
+    "edges": [
+      { "from": "next", "to": "nodes.id", "emptyValues": [0] },
+      { "from": "fallback", "to": "nodes.id", "when": { "path": "checks", "notEmpty": true }, "emptyValues": [0] },
+      { "from": "backgroundStarts", "to": "nodes.id", "kind": "parallel", "deleteFallback": false }
+    ],
+    "terminalLabels": { "background": { "title": "Branch complete", "text": "The main flow continues independently." } },
+    "mutations": {
+      "__start__": [{ "id": "background", "type": "append", "edge": "meta.backgroundStarts", "target": "nodes", "defaults": { "kind": "background", "next": 0 } }]
+    }
+  }
+}
+```
+
+Each `entryBranches.path` resolves to an array of node IDs in the document root. The fixed layout finishes the main flow's full column region before placing each parallel flow, including later forks and nested launches. A parallel edge does not replace the source node's sequential end marker. Duplicate launches and cycles reuse already placed nodes. Disconnected components retain their own sequential layout. These are visual relationships only; the host defines execution and validates which links are allowed.
+
+An object edge rule's optional `when` reads `path` relative to its source collection item. Use one of `empty`, `notEmpty`, `equals`, or `oneOf`. Empty means missing, null, a blank string, or an empty array; `0` and `false` are present. `equals` and `oneOf` compare string representations. Mutation menu `when` (or its `visibleWhen` alias) uses the same condition semantics so available actions agree with the projected edges. Unconditional string/object edge rules retain their existing behavior. `emptyValues` removes explicit target sentinels from the rendered graph without changing saved data.
+
+`graph.nodeViews` and `graph.mutations` first resolve a `collection:kind` key, where the kind field is selected by `graph.nodeKind` (default `kind`), then fall back to collection keys. Configured detail rows can use `emptyValues` and `emptyLabel` to explain terminal targets. `terminalLabels` selects virtual ending text by node kind. The virtual `__start__` menu edits the document root and never creates a saved start node. Mutation `defaults` are deep-cloned, with a fresh numeric ID for every new item. Deleting an item removes its root branch references; an edge with `deleteFallback: false` removes the deleted reference instead of reconnecting to the deleted node's successor.
+
+Unobstructed forward edges route directly toward the target centre. Actual intermediate node rectangles or overlapping unrelated line segments trigger detours; backward edges and self-loops keep exterior lanes. A fan-out may share its source trunk while keeping distinct horizontal lanes.
+
+Graph extensions can call `ctx.focusGraphNode(key)` (for example, `nodes:1` or `options:100`) to select a rendered node, update its inspector, and centre it at a readable scale using the normal pan/zoom camera. It returns `false` for unavailable targets or while loading. Unapplied JSON drafts block changing the selection; focusing the current node preserves its draft. Resource switching should use `window.fwe.navigation.navigate({ domainId, fileName })` to retain the built-in unsaved-change check.
+
 ## Workbench
 
 Use `workbench` when one domain needs multiple collections, shared search, item forms, previews, references, or a custom workspace-like composition.
