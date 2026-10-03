@@ -506,7 +506,11 @@ command can read their DOM value/files; disposing the surface clears them.
 `{ event, element, data, refs, surface, value }`. A configured form retains native
 validation and prevents browser navigation on submit. Ordinary field changes
 call `bindings.onChange({ path, value, event, data, element, field, refs, surface })`;
-the controller decides how to update FWE history and draft state. Rendering a
+field actions and change callbacks run only when the control passes native
+`checkValidity()`. Invalid typing stays visible for correction without changing
+domain state; a commit reports native validation feedback. A form may require an
+otherwise optional model field, but cannot weaken a required model field.
+The controller decides how to update FWE history and draft state. Rendering a
 surface never implicitly invokes business commands or changes model data.
 
 `surface.render(templateId, data?)` returns an element with its own `.refs`, so

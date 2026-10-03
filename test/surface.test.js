@@ -70,6 +70,21 @@ test('surface fields share native control semantics and inherited constraints ca
   surface.refs.enabled.checked = false; surface.refs.enabled.dispatch('change'); assert.equal(changes.at(-1).value, false);
 });
 
+test('editing forms can require optional model fields without weakening required model fields', () => {
+  const surface = runtime().ui.createSurface({ root: 'main', templates: { main: { type: 'stack', children: [
+    { type: 'field', ref: 'optional', field: { schemaPath: 'optional', required: true }, attrs: { required: false } },
+    { type: 'field', ref: 'required', field: { schemaPath: 'required', required: false }, attrs: { required: false } },
+    { type: 'field', ref: 'plain', field: { schemaPath: 'optional' } }
+  ] } } }, { resolveField: key => ({ type: 'number', required: key === 'required' }) });
+  assert.equal(surface.refs.optional.required, true);
+  assert.equal(surface.refs.required.required, true);
+  assert.equal(surface.refs.plain.required, false);
+  surface.update({ unrelated: true });
+  assert.equal(surface.refs.optional.required, true);
+  assert.equal(surface.refs.required.required, true);
+  assert.equal(surface.refs.plain.required, false);
+});
+
 test('password and file values never initialize from data or automatically flow into change bindings', () => {
   const changes = []; const calls = [];
   const data = { apiKey: 'must-not-render' };
@@ -82,6 +97,29 @@ test('password and file values never initialize from data or automatically flow 
   key.value = 'temporary-secret'; key.dispatch('change'); surface.refs.file.dispatch('change');
   assert.equal(changes.length, 0); assert.deepEqual(calls, ['temporary-secret']); assert.equal(data.apiKey, 'must-not-render');
   surface.dispose(); assert.equal(key.value, ''); key.dispatch('change'); assert.equal(calls.length, 1);
+});
+
+test('surface uses native validity before typed changes and configured field actions', () => {
+  const changes = [], actions = [];
+  const surface = runtime().ui.createSurface({ root: 'main', templates: { main: { type: 'stack', children: [
+    { type: 'field', ref: 'amount', field: { type: 'number', min: 0.1, max: 4, required: true, commitEvent: 'input' }, on: { input: 'edit', change: 'commit' } }
+  ] } } }, { onChange: value => changes.push(value.value), actions: { edit: value => actions.push(value.value), commit: value => actions.push(value.value) } });
+  const control = surface.refs.amount; let valid = false, reports = 0;
+  control.checkValidity = () => valid; control.reportValidity = () => { reports++; return valid; };
+  for (const invalid of ['', 'bad', '-1', '9']) { control.value = invalid; control.dispatch('input'); }
+  assert.deepEqual(changes, []); assert.deepEqual(actions, []); assert.equal(reports, 0);
+  control.dispatch('change'); assert.equal(reports, 1); assert.equal(control.value, '9', 'invalid typing remains visible for correction');
+  valid = true; control.value = '2.5'; control.dispatch('input');
+  assert.deepEqual(changes, [2.5]); assert.deepEqual(actions, [2.5]);
+  surface.dispose(); control.dispatch('input'); assert.deepEqual(changes, [2.5]);
+});
+
+test('configured form submit keeps native validation even for dispatched submit events', () => {
+  let calls = 0, reports = 0, valid = false;
+  const surface = runtime().ui.createSurface({ root: 'main', templates: { main: { type: 'form', on: { submit: 'save' } } } }, { actions: { save() { calls++; } } });
+  surface.root.checkValidity = () => valid; surface.root.reportValidity = () => { reports++; };
+  surface.root.dispatch('submit'); assert.equal(calls, 0); assert.equal(reports, 1);
+  valid = true; surface.root.dispatch('submit'); assert.equal(calls, 1);
 });
 
 test('rendered instances have independent references and dispose releases only their own controls', () => {

@@ -94,6 +94,14 @@
       listeners.add({ element, eventName, callback });
     }
 
+    function acceptsControlValue(element, event) {
+      if (typeof element.checkValidity !== 'function' || element.checkValidity()) return true;
+      // Keep incomplete typing in the control without committing an invalid
+      // value. Native validation explains the error on an attempted commit.
+      if (event.type !== 'input') element.reportValidity?.();
+      return false;
+    }
+
     function applyPresentation(element, node, data, localRefs, transient = false, patch = null, previousData = null) {
       if (node.ref) remember(node.ref, element, localRefs);
       if (node.id) { element.id = String(resolve(node.id, data)); remember(element.id, element, localRefs); }
@@ -151,6 +159,7 @@
           if (disposed) return;
           if (eventName === 'submit') event.preventDefault();
           const field = fieldControls.get(element)?.field;
+          if ((eventName === 'submit' || field && ['input', 'change'].includes(eventName)) && !acceptsControlValue(element, event)) return;
           return action({ event, element, data: record.data, refs: localRefs, surface, value: field ? readInspectorControlValue(field, element) : element.value });
         });
       }
@@ -164,7 +173,10 @@
       const model = (declared.schemaPath ? bindings.resolveField?.(declared.schemaPath, declared) : null) || bindings.fields?.[id] || {};
       if (declared.schemaPath && !Object.keys(model).length) throw new Error(`Unknown surface model field: ${declared.schemaPath}`);
       const field = { ...model, ...resolve(declared, data) };
-      for (const key of MODEL_CONSTRAINTS) if (model[key] !== undefined) field[key] = model[key];
+      for (const key of MODEL_CONSTRAINTS) if (key !== 'required' && model[key] !== undefined) field[key] = model[key];
+      // A specific editing form may require an optional model field; it may
+      // never weaken a model requirement.
+      field.required = model.required === true || field.required === true;
       if (field.control) field.type = field.control;
       field.type = ({ string: 'text', boolean: 'checkbox', integer: 'number', int: 'number', bool: 'checkbox' })[field.type] || field.type;
       if (!field.type) field.type = 'text';
@@ -199,6 +211,7 @@
       record.wrapper = wrapper; record.field = field; record.model = model;
       // HTML attributes cannot weaken constraints inherited from the model.
       const authoritative = Object.fromEntries(MODEL_CONSTRAINTS.filter(key => model[key] !== undefined).map(key => [key, model[key]]));
+      authoritative.required = field.required;
       for (const key of ['min', 'max', 'step', 'minLength', 'maxLength', 'pattern']) {
         if (authoritative[key] !== undefined) control[key] = String(authoritative[key]);
       }
@@ -208,7 +221,7 @@
       if (node.ref) remember(`${node.ref}Field`, wrapper, localRefs);
       if (typeof bindings.onChange === 'function' && !isInspectorTransientControl(field)) {
         bindEvent(control, field.commitEvent || getInspectorCommitEvent(field), event => {
-          if (!disposed) bindings.onChange({ path: field.path || field.schemaPath || node.ref, value: readInspectorControlValue(field, control), event, data: record.data, element: control, field, refs: localRefs, surface });
+          if (!disposed && acceptsControlValue(control, event)) bindings.onChange({ path: field.path || field.schemaPath || node.ref, value: readInspectorControlValue(field, control), event, data: record.data, element: control, field, refs: localRefs, surface });
         });
       }
       return wrapper;
@@ -298,7 +311,7 @@
           else element.value = value ?? '';
         }
         for (const key of ['min', 'max', 'step', 'minLength', 'maxLength', 'pattern']) if (model?.[key] !== undefined) element[key] = String(model[key]);
-        if (model?.required !== undefined) element.required = !!model.required;
+        element.required = !!field.required;
       }
       return surface;
     }
