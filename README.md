@@ -720,6 +720,8 @@ server error response. `quiet: true` suppresses startup log lines for an
 embedding CLI's own ready message. Without a guard, existing FWE behavior is
 unchanged; FWE does not invent an authentication policy for every host.
 
+Native saves accept trusted `domain.save.maxBodyBytes`; extensions use `readBody({ maxBytes })`. Both default to 8 MiB, enforce positive integer limits up to 64 MiB in bytes, return 413 before accumulating oversized bodies, and decode UTF-8 after collecting complete bytes. The capability is `boundedRequestBody: 'bytes-v1'`.
+
 Hosts can require `SERVER_INTEGRATION_CONTRACT` (version 1) and its
 `requestGuard`, `extensions`, `launchRevision`, and `runtimeFingerprint`
 capabilities. `SERVER_RUNTIME_FINGERPRINT` captures FWE package/runtime source,

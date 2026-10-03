@@ -25,7 +25,8 @@ const SERVER_INTEGRATION_CONTRACT = Object.freeze({
   extensions: 'sync-setup-async-handlers-v1',
   launchRevision: LAUNCH_REVISION_VERSION,
   runtimeFingerprint: 'fwe-runtime-v1',
-  configuredSurfaces: 'native-inspector-v1'
+  configuredSurfaces: 'native-inspector-v1',
+  boundedRequestBody: 'bytes-v1'
 });
 
 function getServerRuntimeFingerprint() {
@@ -793,6 +794,7 @@ function loadDomainConfig(ref, appDir, options = {}) {
   }
 
   domain.title = raw.title || raw.id || domain.title || domain.id;
+  requestBodyLimit(domain.save?.maxBodyBytes);
   domain.format = domain.format || modelDefaults.format || formatForKind(domain.kind);
   domain.kind = domain.kind || modelDefaults.kind || template.kind;
   domain.modelTemplate = isDslDomain ? 'fwe' : modelDefaults.modelTemplate;
@@ -2203,18 +2205,48 @@ function buildApiErrorPayload(error) {
   return payload;
 }
 
-function readBody(req) {
+function requestBodyLimit(maxBytes = BODY_LIMIT) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 64 * 1024 * 1024) {
+    throw new Error('Request body limit must be a positive integer of at most 64 MiB.');
+  }
+  return maxBytes;
+}
+
+function readBody(req, { maxBytes = BODY_LIMIT } = {}) {
+  const limit = requestBodyLimit(maxBytes);
   return new Promise((resolve, reject) => {
-    let body = '';
-    req.on('data', (chunk) => {
-      body += chunk;
-      if (body.length > BODY_LIMIT) {
-        reject(new Error('Body too large.'));
-        req.destroy();
-      }
+    const chunks = [];
+    let bytes = 0, settled = false;
+    const fail = error => {
+      if (settled) return;
+      settled = true;
+      chunks.length = 0;
+      reject(error);
+    };
+    const tooLarge = () => fail(Object.assign(new Error('Request body exceeds its byte limit.'), { status: 413 }));
+    req.on('data', chunk => {
+      if (settled) return;
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, 'utf8');
+      bytes += buffer.length;
+      if (bytes > limit) tooLarge();
+      else chunks.push(buffer);
     });
-    req.on('end', () => resolve(body));
-    req.on('error', reject);
+    // TCP boundaries may split a UTF-8 code point. Decode only the full body.
+    req.once('end', () => {
+      if (settled) return;
+      settled = true;
+      resolve(Buffer.concat(chunks, bytes).toString('utf8'));
+    });
+    req.once('error', fail);
+    req.once('aborted', () => fail(Object.assign(new Error('Request body was aborted.'), { status: 400 })));
+    req.once('close', () => {
+      if (!req.complete) fail(Object.assign(new Error('Request body closed before completion.'), { status: 400 }));
+    });
+    if (req.aborted) fail(Object.assign(new Error('Request body was aborted.'), { status: 400 }));
+    if (Number(req.headers['content-length']) > limit) {
+      tooLarge();
+      req.resume();
+    }
   });
 }
 
@@ -2277,7 +2309,7 @@ async function handleApi(app, req, res, url, control = {}) {
       return;
     }
     if (req.method === 'POST') {
-      const body = await readBody(req);
+      const body = await readBody(req, { maxBytes: domain.save?.maxBodyBytes });
       const payload = parseRequestJson(body);
       sendJson(res, 200, await createDomainFile(app, domain, payload, sessionId));
       return;
@@ -2294,7 +2326,7 @@ async function handleApi(app, req, res, url, control = {}) {
     }
 
     if (req.method === 'PUT') {
-      const body = await readBody(req);
+      const body = await readBody(req, { maxBytes: domain.save?.maxBodyBytes });
       const payload = parseRequestJson(body);
       sendJson(res, 200, await writeDomainFile(app, domain, name, payload, sessionId));
       return;
@@ -2314,7 +2346,7 @@ async function handleApi(app, req, res, url, control = {}) {
     sessionId,
     sendJson: (status, data) => sendJson(res, status, data),
     sendText: (status, text, contentType) => sendText(res, status, text, contentType),
-    readBody: () => readBody(req),
+    readBody: options => readBody(req, options),
     parseJson: parseRequestJson
   });
   if (handledByExtension) {
