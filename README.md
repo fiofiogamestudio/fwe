@@ -531,6 +531,22 @@ ARIA/data booleans retain their string representation. Event handlers receive
 the updated fragment data. A `text` binding alongside configured children owns
 its own text node, so updating the label does not discard child controls.
 
+`surface.bindCanvas(controlOrRef, { height?, onResize? })` binds a configured canvas
+to its CSS size and device pixel ratio. It returns `{ metrics, resize(), dispose() }`;
+the read-only metrics are `width/height` in CSS pixels, rounded
+`pixelWidth/pixelHeight`, actual `scaleX/scaleY`, and `pixelRatio`. Use
+`context.setTransform(scaleX, 0, 0, scaleY, 0, 0)` and draw/hit-test in CSS
+coordinates. The canvas fills its container; an optional numeric `height` fixes
+its CSS height, otherwise the parent must establish that height. Binding sets
+block layout, 100% width and zero minimum width so bitmap dimensions cannot
+drive layout. It owns the bitmap dimensions even during surface state updates.
+The initial `onResize(metrics)` runs synchronously after sizing; later calls run
+only when CSS size, bitmap size or DPR changes. Unchanged dimensions never clear
+the canvas. ResizeObserver, window resize and resolution media queries track
+container/monitor changes; binding disposal, fragment release and surface disposal
+remove their listeners and observers. Hosts can require
+`SERVER_INTEGRATION_CONTRACT.surfaceCanvas === 'device-resolution-v1'`.
+
 `surface.text(key, vars?)` reads
 configured messages. `surface.setOptions(controlOrRef, rows, selected?)` shares
 native option rendering and preserves model enums and unavailable current

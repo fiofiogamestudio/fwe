@@ -43,9 +43,10 @@
     const listeners = new Set();
     const fieldControls = new WeakMap();
     const records = new Set();
+    const canvasBindings = new Map();
     let sharedData = {};
     let disposed = false;
-    const surface = { root: null, refs, render, update, text, setOptions, release, dispose };
+    const surface = { root: null, refs, render, update, text, setOptions, bindCanvas, release, dispose };
     // Fragment-heavy views refresh lists without disposing the whole workbench.
     // Release only roots observed leaving the DOM; freshly rendered fragments
     // that have not been mounted yet remain usable by the controller.
@@ -54,6 +55,9 @@
         const removed = records.flatMap(record => Array.from(record.removedNodes));
         for (const root of roots) {
           if (!root.isConnected && removed.some(node => node === root || node.contains?.(root))) release(root);
+        }
+        for (const [canvas, binding] of canvasBindings) {
+          if (!canvas.isConnected && removed.some(node => node === canvas || node.contains?.(canvas))) binding.dispose();
         }
       }) : null;
     observer?.observe(document.documentElement, { childList: true, subtree: true });
@@ -124,6 +128,9 @@
         element.dataset.columns = String(columns);
       }
       for (const [key, source] of Object.entries(node.attrs || {})) {
+        // A bound canvas owns its bitmap dimensions; ordinary state patches
+        // must not reset its buffer through configured width/height attributes.
+        if (canvasBindings.has(element) && ['width', 'height'].includes(key)) continue;
         if (/^on/i.test(key) || ['style', 'class', 'className', 'innerHTML', 'outerHTML', 'srcdoc'].includes(key) || FORBIDDEN_KEYS.has(key)) throw new Error(`Unsupported surface attribute: ${key}`);
         const value = resolve(source, data);
         // Native disclosure state belongs to the user until its configured
@@ -327,8 +334,67 @@
       setInspectorControlOptions(control, entry.field, options, value);
     }
 
+    function bindCanvas(controlOrRef, { height, onResize } = {}) {
+      if (disposed) throw new Error('Surface has been disposed.');
+      const canvas = typeof controlOrRef === 'string' ? refs[controlOrRef] : controlOrRef;
+      if (!canvas || canvas.tagName !== 'CANVAS' || !Array.from(records).some(record => record.element === canvas)) throw new Error('Surface canvas binding requires a surface canvas.');
+      if (height !== undefined && (typeof height !== 'number' || !Number.isFinite(height) || height < 0)) throw new Error('Canvas logical height must be a finite nonnegative number.');
+      if (onResize !== undefined && typeof onResize !== 'function') throw new Error('Canvas onResize must be a function.');
+      canvasBindings.get(canvas)?.dispose();
+      Object.assign(canvas.style, { display: 'block', width: '100%', height: height === undefined ? '100%' : `${height}px`, minWidth: '0' });
+      const view = canvas.ownerDocument?.defaultView || window;
+      let metrics = null, released = false, media = null, watchedRatio = null;
+      const resizeObserver = typeof view.ResizeObserver === 'function' ? new view.ResizeObserver(resize)
+        : typeof ResizeObserver === 'function' ? new ResizeObserver(resize) : null;
+      const binding = { get metrics() { return metrics; }, resize, dispose: disposeCanvas };
+      canvasBindings.set(canvas, binding);
+      function unwatchRatio() {
+        if (typeof media?.removeEventListener === 'function') media.removeEventListener('change', resize);
+        else media?.removeListener?.(resize);
+        media = null;
+      }
+      function watchRatio(pixelRatio) {
+        if (watchedRatio === pixelRatio) return;
+        unwatchRatio(); watchedRatio = pixelRatio;
+        if (typeof view.matchMedia !== 'function') return;
+        media = view.matchMedia(`(resolution: ${pixelRatio}dppx)`);
+        if (typeof media.addEventListener === 'function') media.addEventListener('change', resize);
+        else media.addListener?.(resize);
+      }
+      function resize() {
+        if (released) return metrics;
+        const rect = canvas.getBoundingClientRect();
+        const width = Number.isFinite(rect.width) ? Math.max(0, rect.width) : 0;
+        const logicalHeight = Number.isFinite(rect.height) ? Math.max(0, rect.height) : 0;
+        const pixelRatio = Number.isFinite(view.devicePixelRatio) && view.devicePixelRatio > 0 ? view.devicePixelRatio : 1;
+        const pixelWidth = Math.round(width * pixelRatio), pixelHeight = Math.round(logicalHeight * pixelRatio);
+        const next = Object.freeze({ width, height: logicalHeight, pixelWidth, pixelHeight,
+          scaleX: width ? pixelWidth / width : pixelRatio, scaleY: logicalHeight ? pixelHeight / logicalHeight : pixelRatio, pixelRatio });
+        watchRatio(pixelRatio);
+        const changed = !metrics || Object.keys(next).some(key => next[key] !== metrics[key]);
+        const bitmapChanged = canvas.width !== pixelWidth || canvas.height !== pixelHeight;
+        if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
+        if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
+        metrics = next;
+        if (changed || bitmapChanged) onResize?.(metrics);
+        return metrics;
+      }
+      function disposeCanvas() {
+        if (released) return;
+        released = true;
+        resizeObserver?.disconnect(); unwatchRatio();
+        view.removeEventListener?.('resize', resize);
+        if (canvasBindings.get(canvas) === binding) canvasBindings.delete(canvas);
+      }
+      resizeObserver?.observe(canvas);
+      view.addEventListener?.('resize', resize);
+      try { resize(); } catch (error) { disposeCanvas(); throw error; }
+      return binding;
+    }
+
     function release(root) {
       if (!roots.has(root)) return;
+      for (const [canvas, binding] of canvasBindings) if (canvas === root || root.contains?.(canvas)) binding.dispose();
       for (const listener of listeners) {
         if (listener.element === root || root.contains?.(listener.element)) {
           listener.element.removeEventListener(listener.eventName, listener.callback);
@@ -345,6 +411,7 @@
       if (disposed) return;
       disposed = true;
       observer?.disconnect();
+      for (const binding of canvasBindings.values()) binding.dispose();
       for (const { element, eventName, callback } of listeners) element.removeEventListener(eventName, callback);
       listeners.clear();
       for (const root of roots) {
