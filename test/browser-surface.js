@@ -42,6 +42,44 @@ async function main() {
       await cdp.call('Input.dispatchKeyEvent', { type: 'keyDown', key, code, windowsVirtualKeyCode, modifiers });
       await cdp.call('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode, modifiers });
     }
+    await read(`(() => {
+      const tones = ['success', 'warning', 'danger', 'primary', 'info', 'muted', 'default'];
+      window.filledClicks = 0;
+      window.filledSurface = window.createFweRuntime().ui.createSurface({ root: 'main', templates: { main: { type: 'row', children: [
+        ...tones.map(tone => ({ type: 'button', id: 'filled-' + tone, text: tone, preset: 'filled', tone,
+          attrs: { 'aria-pressed': tone === 'success' ? { $path: 'selected' } : false, disabled: tone === 'success' ? { $path: 'disabled' } : false }, on: { click: 'choose' } })),
+        { type: 'button', id: 'ordinary-success', text: 'Ordinary', tone: 'success' }
+      ] } } }, { data: { selected: false, disabled: false }, actions: { choose() { window.filledClicks++; } } });
+      document.body.prepend(window.filledSurface.root);
+    })()`);
+    const style = selector => read(`(() => { const el = document.querySelector(${JSON.stringify(selector)}), s = getComputedStyle(el); return { background: s.backgroundColor, color: s.color, border: s.borderTopColor, filter: s.filter, outline: s.outlineWidth, offset: s.outlineOffset, shadow: s.boxShadow, cursor: s.cursor, disabled: el.disabled, focus: el.matches(':focus-visible') }; })()`);
+    const luminance = color => color.match(/[\d.]+/g).slice(0, 3).map(Number).map(value => {
+      const c = value / 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    }).reduce((sum, value, i) => sum + value * [0.2126, 0.7152, 0.0722][i], 0);
+    for (const tone of ['success', 'warning', 'danger', 'primary', 'info', 'muted', 'default']) {
+      const colors = await style('#filled-' + tone), a = luminance(colors.background), b = luminance(colors.color);
+      assert.ok((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05) >= 4.5, JSON.stringify({ tone, colors }));
+      assert.equal(colors.border, colors.background); assert.notEqual(colors.background, 'rgb(255, 255, 255)');
+    }
+    assert.equal((await style('#filled-success')).background, 'rgb(35, 122, 69)');
+    assert.equal((await style('#filled-warning')).background, 'rgb(241, 199, 91)');
+    assert.equal((await style('#filled-danger')).background, 'rgb(185, 64, 64)');
+    assert.equal((await style('#ordinary-success')).background, 'rgb(255, 255, 255)', 'existing tone only colors text');
+    const hover = await read('(() => { const r = document.querySelector("#filled-success").getBoundingClientRect(); return { x:r.x+r.width/2, y:r.y+r.height/2 }; })()');
+    await cdp.call('Input.dispatchMouseEvent', { type: 'mouseMoved', ...hover });
+    assert.equal((await style('#filled-success')).filter, 'brightness(0.94)');
+    await key('Tab', 'Tab', 9); await read('document.querySelector("#filled-success").focus()');
+    const focused = await style('#filled-success'); assert.equal(focused.focus, true); assert.equal(focused.outline, '3px'); assert.equal(focused.offset, '4px');
+    await read('document.querySelector("#ordinary-success").focus(); window.filledSurface.update({ selected:true })');
+    const selected = await style('#filled-success'); assert.notEqual(selected.shadow, 'none'); assert.equal(selected.outline, '2px');
+    await click('#filled-success'); assert.equal(await read('window.filledClicks'), 1);
+    await read('window.filledSurface.update({ disabled:true })');
+    await click('#filled-success'); assert.equal(await read('window.filledClicks'), 1, 'native disabled button ignores real pointer input');
+    const disabled = await style('#filled-success'); assert.equal(disabled.disabled, true); assert.equal(disabled.cursor, 'not-allowed'); assert.equal(disabled.filter, 'none'); assert.equal(disabled.shadow, 'none');
+    await read('window.filledSurface.update({ disabled:false }); document.querySelector("#filled-warning").focus()');
+    const filledCapture = await cdp.call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }); fs.writeFileSync(path.join(output, 'filled-buttons.png'), Buffer.from(filledCapture.data, 'base64'));
+    await read('window.filledSurface.dispose()');
+    cases.push('filled buttons expose semantic backgrounds with 4.5:1 contrast, hover/focus/selection states and native disabled interaction; ordinary tone styling is unchanged');
     assert.equal(await read('document.querySelector("#secret").value'), '');
     assert.equal(await read('document.querySelector("#name").maxLength'), 20);
     assert.deepEqual(await read('[...document.querySelector("#quality").options].map(x=>x.value)'), ['auto', 'standard', 'hd']);

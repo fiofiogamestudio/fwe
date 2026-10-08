@@ -114,7 +114,8 @@
       if (node.hidden !== undefined) element.hidden = !!resolve(node.hidden, data);
       const presets = Array.isArray(node.preset) ? node.preset : (node.preset ? [node.preset] : []);
       for (const preset of presets) {
-        if (!['editor', 'workspace', 'comparison', 'preview', 'stage', 'thumbnail', 'overlay', 'image', 'ghost', 'scroll', 'compact'].includes(preset)) throw new Error(`Unknown surface preset: ${preset}`);
+        if (!['editor', 'workspace', 'comparison', 'preview', 'stage', 'thumbnail', 'overlay', 'image', 'ghost', 'scroll', 'compact', 'filled'].includes(preset)) throw new Error(`Unknown surface preset: ${preset}`);
+        if (preset === 'filled' && node.type !== 'button') throw new Error('Surface filled preset requires a button.');
         element.classList.add(`fwe-surface--${preset}`);
       }
       if (node.tone !== undefined) {

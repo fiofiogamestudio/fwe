@@ -533,6 +533,17 @@ the main command the theme accent fill. Combine `preview` with `stage` for a
 420-pixel main canvas (340 on narrow screens), or `thumbnail` for a 180-pixel
 secondary preview. Preview images use `contain` and a bounded height.
 
+Buttons can opt into `preset: "filled"` with `tone: "success"`, `"warning"`,
+`"danger"`, `"primary"`, `"info"`, `"muted"` or `"default"`. Their background and
+border use that semantic tone with contrasting text; an omitted tone uses the
+neutral fill. Existing buttons without this preset retain their current styling.
+`filled` is only valid on `type: "button"`, including within a preset array.
+Hover, active and keyboard-focus states are visible; `attrs: { "aria-pressed":
+true }` adds a selection ring without changing the label. Bind `attrs.disabled`
+for native disabled behavior and a muted disabled appearance. Hosts requiring
+this preset can check
+`SERVER_INTEGRATION_CONTRACT.surfaceFilledButtons === 'semantic-tones-v1'`.
+
 In managed desktop navigation, FWE omits the empty resource context bar when the
 section hides its file selector and no project context exists. Narrow screens
 retain the section selectors. A configured `details.attrs.open` sets the initial

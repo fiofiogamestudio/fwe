@@ -17,6 +17,10 @@
   --fwe-space-sm: 8px;
   --fwe-space-md: 12px;
   --fwe-space-lg: 16px;
+  --fwe-fill-success: #237a45;
+  --fwe-fill-warning: #f1c75b;
+  --fwe-fill-danger: #b94040;
+  --fwe-fill-warning-text: #392e11;
 }
 
 /* Shared configuration-driven surfaces. Hosts select named presets, not CSS. */
@@ -56,6 +60,17 @@
 .fwe-surface [data-tone="success"] { color: var(--green); }
 .fwe-surface [data-tone="primary"], .fwe-surface [data-tone="info"] { color: var(--accent); }
 .fwe-surface .fwe-surface-button[data-tone="primary"] { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
+.fwe-surface .fwe-surface-button.fwe-surface--filled { --fwe-button-fill: var(--line-strong); --fwe-button-ink: #fff; background: var(--fwe-button-fill); border-color: var(--fwe-button-fill); color: var(--fwe-button-ink); font-weight: 700; }
+.fwe-surface .fwe-surface-button.fwe-surface--filled[data-tone="success"] { --fwe-button-fill: var(--fwe-fill-success); }
+.fwe-surface .fwe-surface-button.fwe-surface--filled[data-tone="warning"] { --fwe-button-fill: var(--fwe-fill-warning); --fwe-button-ink: var(--fwe-fill-warning-text); }
+.fwe-surface .fwe-surface-button.fwe-surface--filled[data-tone="danger"] { --fwe-button-fill: var(--fwe-fill-danger); }
+.fwe-surface .fwe-surface-button.fwe-surface--filled[data-tone="primary"], .fwe-surface .fwe-surface-button.fwe-surface--filled[data-tone="info"] { --fwe-button-fill: var(--accent); }
+.fwe-surface .fwe-surface-button.fwe-surface--filled[data-tone="muted"] { --fwe-button-fill: var(--muted); }
+.fwe-surface .fwe-surface-button.fwe-surface--filled:not(:disabled):hover { filter: brightness(.94); }
+.fwe-surface .fwe-surface-button.fwe-surface--filled:not(:disabled):active { filter: brightness(.88); }
+.fwe-surface .fwe-surface-button.fwe-surface--filled[aria-pressed="true"] { box-shadow: inset 0 0 0 2px var(--fwe-button-ink); outline: 2px solid var(--text); outline-offset: 1px; }
+.fwe-surface .fwe-surface-button.fwe-surface--filled:focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; }
+.fwe-surface .fwe-surface-button.fwe-surface--filled:disabled { background: var(--line); border-color: var(--line); color: var(--muted); opacity: 1; cursor: not-allowed; filter: none; box-shadow: none; outline: none; }
 .fwe-surface .fwe-surface-field { min-width: 0; margin: 0; }
 .fwe-surface-field > input, .fwe-surface-field > select, .fwe-surface-field > textarea { width: 100%; min-width: 0; }
 .fwe-surface .fwe-surface-field--checkbox { display: flex; flex-direction: row-reverse; align-items: center; justify-content: flex-end; gap: 8px; }

@@ -30,6 +30,35 @@ function runtime() {
   return context.window.createFweRuntime();
 }
 
+test('filled buttons retain semantic tones and native state bindings without changing ordinary tones', () => {
+  assert.equal(require('../src/server').SERVER_INTEGRATION_CONTRACT.surfaceFilledButtons, 'semantic-tones-v1');
+  const surface = runtime().ui.createSurface({ root: 'main', templates: { main: { type: 'row', children: [
+    { type: 'button', ref: 'filled', preset: ['compact', 'filled'], tone: { $path: 'tone' }, attrs: { 'aria-pressed': { $path: 'selected' }, disabled: { $path: 'disabled' } } },
+    { type: 'button', ref: 'ordinary', tone: 'success' }
+  ] } } }, { data: { tone: 'success', selected: false, disabled: false } });
+  assert.match(surface.refs.filled.className, /fwe-surface--filled/);
+  assert.doesNotMatch(surface.refs.ordinary.className, /fwe-surface--filled/);
+  assert.equal(surface.refs.ordinary.dataset.tone, 'success');
+  for (const tone of ['warning', 'danger', 'primary', 'info', 'muted', 'default', null]) {
+    surface.update({ tone, selected: true, disabled: true });
+    assert.equal(surface.refs.filled.dataset.tone, tone || undefined);
+    assert.equal(surface.refs.filled.attributes['aria-pressed'], 'true');
+    assert.equal(surface.refs.filled.attributes.disabled, '');
+  }
+  surface.update({ selected: false, disabled: false });
+  assert.equal(surface.refs.filled.attributes['aria-pressed'], 'false');
+  assert.equal(surface.refs.filled.attributes.disabled, undefined);
+});
+
+test('filled preset rejects non-button nodes and unknown presets or tones', () => {
+  const ui = runtime().ui;
+  for (const type of ['card', 'badge', 'text', 'link', 'field']) {
+    assert.throws(() => ui.createSurface({ root: 'main', templates: { main: { type, preset: 'filled' } } }), /filled preset requires a button/);
+  }
+  assert.throws(() => ui.createSurface({ root: 'main', templates: { main: { type: 'button', preset: 'solid' } } }), /Unknown surface preset/);
+  assert.throws(() => ui.createSurface({ root: 'main', templates: { main: { type: 'button', preset: 'filled', tone: 'rainbow' } } }), /Unknown surface tone/);
+});
+
 test('surface configuration controls labels, layout, conditions, attributes, repeated templates and actions', () => {
   const ui = runtime().ui;
   const calls = [];
